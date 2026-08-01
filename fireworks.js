@@ -87,23 +87,36 @@
   }
 
   // Real firework samples (Mixkit — free license)
-  const SAMPLE_URLS = {
-    whistle: ["sounds/whistle.mp3"],
+  const SAMPLE_FILES = {
+    whistle: ["whistle.mp3"],
     boom: [
-      "sounds/bang.mp3",
-      "sounds/clear.mp3",
-      "sounds/small.mp3",
-      "sounds/rockets.mp3",
-      "sounds/whoosh-boom.mp3",
-      "sounds/whoosh-bangs.mp3",
+      "bang.mp3",
+      "clear.mp3",
+      "small.mp3",
+      "rockets.mp3",
+      "whoosh-boom.mp3",
+      "whoosh-bangs.mp3",
     ],
-    multi: ["sounds/multi.mp3", "sounds/several.mp3"],
+    multi: ["multi.mp3", "several.mp3"],
   };
 
   const sampleBuffers = { whistle: [], boom: [], multi: [] };
   let samplesReady = false;
   let samplesLoading = null;
   let lastBoomAt = 0;
+
+  function soundBases() {
+    const bases = [];
+    // Same-origin (GitHub Pages / local server)
+    try {
+      bases.push(new URL("sounds/", window.location.href).href);
+    } catch (_) {}
+    // Repo-relative when hosted under /phaohoane/
+    bases.push("https://ancoine6232.github.io/phaohoane/sounds/");
+    // Raw GitHub fallback (works even while Pages is catching up)
+    bases.push("https://raw.githubusercontent.com/ancoine6232/phaohoane/main/sounds/");
+    return [...new Set(bases)];
+  }
 
   function ensureAudio() {
     if (!audioCtx) {
@@ -115,6 +128,38 @@
     return audioCtx;
   }
 
+  async function fetchSoundArrayBuffer(file) {
+    const bases = soundBases();
+    let lastErr = null;
+    for (const base of bases) {
+      const url = base.endsWith("/") ? base + file : base + "/" + file;
+      try {
+        const res = await fetch(url, { cache: "force-cache", mode: "cors" });
+        if (!res.ok) {
+          lastErr = new Error(`HTTP ${res.status} ${url}`);
+          continue;
+        }
+        return await res.arrayBuffer();
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    throw lastErr || new Error("No sound source");
+  }
+
+  async function decodeSound(ac, arrayBuffer) {
+    // Some browsers detach the buffer; always pass a copy
+    const copy = arrayBuffer.slice(0);
+    try {
+      return await ac.decodeAudioData(copy);
+    } catch (_) {
+      // Older Safari callback style
+      return await new Promise((resolve, reject) => {
+        ac.decodeAudioData(arrayBuffer.slice(0), resolve, reject);
+      });
+    }
+  }
+
   async function loadSamples() {
     const ac = ensureAudio();
     if (!ac) return false;
@@ -122,28 +167,34 @@
     if (samplesLoading) return samplesLoading;
 
     samplesLoading = (async () => {
-      const entries = Object.entries(SAMPLE_URLS);
+      // Reset in case a previous attempt partially failed
+      sampleBuffers.whistle = [];
+      sampleBuffers.boom = [];
+      sampleBuffers.multi = [];
+
+      const entries = Object.entries(SAMPLE_FILES);
       await Promise.all(
-        entries.map(async ([key, urls]) => {
+        entries.map(async ([key, files]) => {
           const buffers = [];
-          for (const url of urls) {
+          for (const file of files) {
             try {
-              const res = await fetch(url);
-              if (!res.ok) continue;
-              const arr = await res.arrayBuffer();
-              const buf = await ac.decodeAudioData(arr.slice(0));
+              const arr = await fetchSoundArrayBuffer(file);
+              const buf = await decodeSound(ac, arr);
               buffers.push(buf);
             } catch (err) {
-              console.warn("Sound load failed:", url, err);
+              console.warn("Sound load failed:", file, err);
             }
           }
           sampleBuffers[key] = buffers;
         })
       );
+
       samplesReady =
         sampleBuffers.boom.length > 0 ||
         sampleBuffers.whistle.length > 0 ||
         sampleBuffers.multi.length > 0;
+
+      if (!samplesReady) samplesLoading = null; // allow retry
       return samplesReady;
     })();
 
@@ -609,17 +660,22 @@
     if (!soundOn) {
       soundBtn.textContent = "Đang tải âm thanh…";
       soundBtn.disabled = true;
-      const ok = await loadSamples();
-      soundBtn.disabled = false;
-      if (!ok) {
-        soundBtn.textContent = "Không tải được âm thanh";
-        return;
+      try {
+        const ok = await loadSamples();
+        if (!ok) {
+          soundBtn.textContent = "Thử lại âm thanh";
+          soundBtn.disabled = false;
+          return;
+        }
+        soundOn = true;
+        soundBtn.setAttribute("aria-pressed", "true");
+        soundBtn.textContent = "Tắt âm thanh";
+        ensureAudio();
+      } catch (err) {
+        console.warn(err);
+        soundBtn.textContent = "Thử lại âm thanh";
       }
-      soundOn = true;
-      soundBtn.setAttribute("aria-pressed", "true");
-      soundBtn.textContent = "Tắt âm thanh";
-      // Warm-up click so mobile browsers unlock audio
-      ensureAudio();
+      soundBtn.disabled = false;
     } else {
       soundOn = false;
       soundBtn.setAttribute("aria-pressed", "false");
