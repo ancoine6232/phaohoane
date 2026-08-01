@@ -31,6 +31,8 @@
   let autoTimer = 0;
   let soundOn = false;
   let audioCtx = null;
+  let isMobile = false;
+  let particleScale = 1;
 
   const nextNewYear = (() => {
     const now = new Date();
@@ -44,9 +46,11 @@
   yearLabel.textContent = String(nextNewYear.getFullYear());
 
   function resize() {
-    dpr = Math.min(window.devicePixelRatio || 1, 2);
     width = window.innerWidth;
     height = window.innerHeight;
+    isMobile = width <= 640 || ("ontouchstart" in window && width <= 900);
+    particleScale = isMobile ? 0.55 : 1;
+    dpr = Math.min(window.devicePixelRatio || 1, isMobile ? 1.5 : 2);
     canvas.width = Math.floor(width * dpr);
     canvas.height = Math.floor(height * dpr);
     canvas.style.width = `${width}px`;
@@ -56,7 +60,8 @@
   }
 
   function seedStars() {
-    const count = Math.floor((width * height) / 9000);
+    const density = isMobile ? 14000 : 9000;
+    const count = Math.floor((width * height) / density);
     stars = Array.from({ length: count }, () => ({
       x: Math.random() * width,
       y: Math.random() * height * 0.72,
@@ -232,14 +237,14 @@
   function explode(x, y, palette, style) {
     const kind = style || pick(["peony", "chrys", "ring", "willow", "spark", "double"]);
     const base = palette || pick(PALETTES);
-    let count = 140;
+    let count = Math.floor(140 * particleScale);
 
-    if (kind === "peony") count = 160 + ((Math.random() * 60) | 0);
-    if (kind === "chrys") count = 200 + ((Math.random() * 80) | 0);
-    if (kind === "ring") count = 110;
-    if (kind === "willow") count = 150;
-    if (kind === "spark") count = 90;
-    if (kind === "double") count = 130;
+    if (kind === "peony") count = Math.floor((160 + ((Math.random() * 60) | 0)) * particleScale);
+    if (kind === "chrys") count = Math.floor((200 + ((Math.random() * 80) | 0)) * particleScale);
+    if (kind === "ring") count = Math.floor(110 * particleScale);
+    if (kind === "willow") count = Math.floor(150 * particleScale);
+    if (kind === "spark") count = Math.floor(90 * particleScale);
+    if (kind === "double") count = Math.floor(130 * particleScale);
 
     boom(x, y, kind === "chrys" || kind === "double" ? 1.25 : 1);
 
@@ -325,7 +330,8 @@
   function finaleBurst() {
     const cx = width * 0.5;
     const cy = height * 0.3;
-    for (let i = 0; i < 16; i++) {
+    const bursts = isMobile ? 8 : 16;
+    for (let i = 0; i < bursts; i++) {
       setTimeout(() => {
         explode(
           cx + rand(-width * 0.38, width * 0.38),
@@ -333,10 +339,10 @@
           pick(PALETTES),
           pick(["peony", "chrys", "ring", "willow", "double"])
         );
-      }, i * 90);
+      }, i * (isMobile ? 120 : 90));
     }
-    // Extra rising rockets during finale
-    for (let i = 0; i < 10; i++) {
+    const extra = isMobile ? 5 : 10;
+    for (let i = 0; i < extra; i++) {
       launch(
         rand(width * 0.08, width * 0.92),
         rand(height * 0.12, height * 0.36),
@@ -515,9 +521,9 @@
       const wave = Math.random();
       if (wave > 0.82) {
         finaleBurst();
-        autoTimer = rand(1600, 2600);
+        autoTimer = rand(isMobile ? 2200 : 1600, isMobile ? 3400 : 2600);
       } else if (wave > 0.35) {
-        const n = 4 + ((Math.random() * 5) | 0);
+        const n = isMobile ? 2 + ((Math.random() * 3) | 0) : 4 + ((Math.random() * 5) | 0);
         for (let i = 0; i < n; i++) {
           launch(
             rand(width * 0.06, width * 0.94),
@@ -527,9 +533,9 @@
             Math.random() > 0.5
           );
         }
-        autoTimer = rand(280, 650);
+        autoTimer = rand(isMobile ? 500 : 280, isMobile ? 1000 : 650);
       } else {
-        const n = 2 + ((Math.random() * 2) | 0);
+        const n = isMobile ? 1 + ((Math.random() * 2) | 0) : 2 + ((Math.random() * 2) | 0);
         for (let i = 0; i < n; i++) {
           launch(
             rand(width * 0.1, width * 0.9),
@@ -539,7 +545,7 @@
             true
           );
         }
-        autoTimer = rand(180, 420);
+        autoTimer = rand(isMobile ? 320 : 180, isMobile ? 700 : 420);
       }
     }
 
@@ -566,8 +572,8 @@
     const x = clientX;
     const y = Math.min(clientY, height * 0.55);
     const target = Math.max(height * 0.1, y);
-    // Fan of rockets on click
-    for (let i = 0; i < 5; i++) {
+    const n = isMobile ? 3 : 5;
+    for (let i = 0; i < n; i++) {
       launch(
         x + rand(-70, 70),
         target + rand(-40, 40),
@@ -596,7 +602,8 @@
   updateCountdown();
   setInterval(updateCountdown, 1000);
 
-  for (let i = 0; i < 14; i++) {
+  const opening = isMobile ? 7 : 14;
+  for (let i = 0; i < opening; i++) {
     launch(
       rand(width * 0.08, width * 0.92),
       rand(height * 0.12, height * 0.4),
