@@ -87,34 +87,24 @@
     return arr[(Math.random() * arr.length) | 0];
   }
 
-  // Real firework samples (Mixkit — free license)
+  // Short single-bang samples only (long whoosh/multi clips sound random vs visuals)
   const SAMPLE_FILES = {
     whistle: ["whistle.mp3"],
-    boom: [
-      "bang.mp3",
-      "clear.mp3",
-      "small.mp3",
-      "rockets.mp3",
-      "whoosh-boom.mp3",
-      "whoosh-bangs.mp3",
-    ],
-    multi: ["multi.mp3", "several.mp3"],
+    boom: ["bang.mp3", "clear.mp3", "small.mp3"],
   };
 
-  const sampleBuffers = { whistle: [], boom: [], multi: [] };
+  const sampleBuffers = { whistle: [], boom: [] };
   let samplesReady = false;
   let samplesLoading = null;
-  let lastBoomAt = 0;
+  let activeBooms = 0;
+  const MAX_ACTIVE_BOOMS = 4;
 
   function soundBases() {
     const bases = [];
-    // Same-origin (GitHub Pages / local server)
     try {
       bases.push(new URL("sounds/", window.location.href).href);
     } catch (_) {}
-    // Repo-relative when hosted under /phaohoane/
     bases.push("https://ancoine6232.github.io/phaohoane/sounds/");
-    // Raw GitHub fallback (works even while Pages is catching up)
     bases.push("https://raw.githubusercontent.com/ancoine6232/phaohoane/main/sounds/");
     return [...new Set(bases)];
   }
@@ -149,16 +139,32 @@
   }
 
   async function decodeSound(ac, arrayBuffer) {
-    // Some browsers detach the buffer; always pass a copy
     const copy = arrayBuffer.slice(0);
     try {
       return await ac.decodeAudioData(copy);
     } catch (_) {
-      // Older Safari callback style
       return await new Promise((resolve, reject) => {
         ac.decodeAudioData(arrayBuffer.slice(0), resolve, reject);
       });
     }
+  }
+
+  // Find the loudest moment so playback can start on the bang, not a random whoosh intro
+  function findPeakOffset(buffer) {
+    const data = buffer.getChannelData(0);
+    const step = Math.max(1, (data.length / 4000) | 0);
+    let peak = 0;
+    let peakIndex = 0;
+    for (let i = 0; i < data.length; i += step) {
+      const v = Math.abs(data[i]);
+      if (v > peak) {
+        peak = v;
+        peakIndex = i;
+      }
+    }
+    // Start a hair before the peak so the attack stays natural
+    const lead = Math.floor(buffer.sampleRate * 0.02);
+    return Math.max(0, (peakIndex - lead) / buffer.sampleRate);
   }
 
   async function loadSamples() {
@@ -168,58 +174,65 @@
     if (samplesLoading) return samplesLoading;
 
     samplesLoading = (async () => {
-      // Reset in case a previous attempt partially failed
       sampleBuffers.whistle = [];
       sampleBuffers.boom = [];
-      sampleBuffers.multi = [];
 
       const entries = Object.entries(SAMPLE_FILES);
       await Promise.all(
         entries.map(async ([key, files]) => {
-          const buffers = [];
+          const prepared = [];
           for (const file of files) {
             try {
               const arr = await fetchSoundArrayBuffer(file);
               const buf = await decodeSound(ac, arr);
-              buffers.push(buf);
+              prepared.push({
+                buffer: buf,
+                offset: key === "boom" ? findPeakOffset(buf) : 0,
+              });
             } catch (err) {
               console.warn("Sound load failed:", file, err);
             }
           }
-          sampleBuffers[key] = buffers;
+          sampleBuffers[key] = prepared;
         })
       );
 
-      samplesReady =
-        sampleBuffers.boom.length > 0 ||
-        sampleBuffers.whistle.length > 0 ||
-        sampleBuffers.multi.length > 0;
-
-      if (!samplesReady) samplesLoading = null; // allow retry
+      samplesReady = sampleBuffers.boom.length > 0;
+      if (!samplesReady) samplesLoading = null;
       return samplesReady;
     })();
 
     return samplesLoading;
   }
 
-  function playBuffer(buffer, opts = {}) {
-    if (!soundOn || !buffer) return;
+  function playSample(sample, opts = {}) {
+    if (!soundOn || !sample) return null;
     const ac = ensureAudio();
-    if (!ac) return;
+    if (!ac) return null;
 
     const {
       pan = 0,
       volume = 0.7,
       rate = 1,
-      when = 0,
+      duration = null,
+      offsetBoost = 0,
     } = opts;
 
     const src = ac.createBufferSource();
-    src.buffer = buffer;
+    src.buffer = sample.buffer;
     src.playbackRate.value = rate;
 
     const gain = ac.createGain();
-    gain.gain.value = Math.max(0.0001, volume);
+    const t = ac.currentTime;
+    const vol = Math.max(0.0001, volume);
+    gain.gain.setValueAtTime(vol, t);
+    // Quick fade-out so long tails don't linger randomly
+    const playDur =
+      duration != null
+        ? duration
+        : Math.min(0.55, (sample.buffer.duration - sample.offset) / rate);
+    gain.gain.setValueAtTime(vol, t + playDur * 0.55);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + playDur);
 
     if (ac.createStereoPanner) {
       const panner = ac.createStereoPanner();
@@ -232,56 +245,54 @@
       gain.connect(ac.destination);
     }
 
-    const t = ac.currentTime + when;
-    src.start(t);
-    src.stop(t + buffer.duration / rate + 0.05);
+    const offset = Math.min(
+      sample.buffer.duration - 0.05,
+      Math.max(0, sample.offset + offsetBoost)
+    );
+    src.start(t, offset, playDur * rate + 0.02);
+    return { src, playDur };
   }
 
   function whoosh(x) {
     if (!soundOn || !samplesReady) return;
-    const buf = pick(sampleBuffers.whistle);
-    if (!buf) return;
+    const sample = pick(sampleBuffers.whistle);
+    if (!sample) return;
     const pan = ((x / width) * 2 - 1) * 0.75;
-    playBuffer(buf, {
+    // Short quiet whistle only — avoid constant screeching
+    playSample(sample, {
       pan,
-      volume: isMobile ? 0.35 : 0.45,
-      rate: rand(0.92, 1.12),
+      volume: isMobile ? 0.12 : 0.16,
+      rate: rand(0.95, 1.08),
+      duration: 0.35,
+      offsetBoost: 0,
     });
   }
 
   function boom(x, y, power = 1, kind = "peony") {
     if (!soundOn || !samplesReady) return;
+    if (!sampleBuffers.boom.length) return;
 
-    const now = performance.now();
-    // Avoid overlapping into a wall of noise
-    if (now - lastBoomAt < (isMobile ? 90 : 55)) return;
-    lastBoomAt = now;
+    // Soft voice limit: still play, but quieter when many explode at once
+    if (activeBooms >= MAX_ACTIVE_BOOMS) return;
 
     const pan = ((x / width) * 2 - 1) * 0.85;
-    const heightFactor = 0.65 + (1 - Math.min(1, y / height)) * 0.45;
-    const pool =
-      (kind === "double" || kind === "chrys") && sampleBuffers.multi.length
-        ? sampleBuffers.multi
-        : sampleBuffers.boom;
-    const buf = pick(pool.length ? pool : sampleBuffers.boom);
-    if (!buf) return;
+    const heightFactor = 0.7 + (1 - Math.min(1, y / height)) * 0.35;
+    const sample = pick(sampleBuffers.boom);
+    const baseVol = kind === "spark" ? 0.5 : 0.78;
+    const crowded = 1 / (1 + activeBooms * 0.35);
 
-    const baseVol = kind === "spark" ? 0.45 : 0.72;
-    playBuffer(buf, {
+    activeBooms += 1;
+    const played = playSample(sample, {
       pan,
-      volume: Math.min(1, baseVol * power * heightFactor * (isMobile ? 0.8 : 1)),
-      rate: rand(0.88, 1.15),
+      volume: Math.min(0.95, baseVol * power * heightFactor * crowded * (isMobile ? 0.85 : 1)),
+      rate: rand(0.94, 1.06),
+      duration: kind === "spark" ? 0.35 : 0.5,
     });
 
-    // Occasional layered second crack for denser shells
-    if (!isMobile && power > 1.1 && Math.random() > 0.55 && sampleBuffers.boom.length) {
-      playBuffer(pick(sampleBuffers.boom), {
-        pan: pan + rand(-0.2, 0.2),
-        volume: 0.28 * power,
-        rate: rand(1.05, 1.25),
-        when: 0.04,
-      });
-    }
+    const releaseMs = ((played && played.playDur) || 0.45) * 1000;
+    setTimeout(() => {
+      activeBooms = Math.max(0, activeBooms - 1);
+    }, releaseMs);
   }
 
   function launch(x, targetY, palette, delay = 0, multi = false) {
@@ -481,7 +492,8 @@
 
       if (!r.whistled) {
         r.whistled = true;
-        if (soundOn && Math.random() > (isMobile ? 0.4 : 0.15)) whoosh(r.x);
+        // Very rare whistle — only ~8% of rockets
+        if (soundOn && Math.random() < 0.08) whoosh(r.x);
       }
 
       r.x += r.vx;
