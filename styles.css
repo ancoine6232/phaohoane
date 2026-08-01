@@ -1,0 +1,257 @@
+:root {
+  --night-deep: #050814;
+  --night-mid: #0b1530;
+  --night-edge: #152044;
+  --gold: #f0d078;
+  --gold-soft: rgba(240, 208, 120, 0.72);
+  --mist: rgba(214, 228, 255, 0.78);
+  --ink: #e8eefc;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--night-deep);
+  color: var(--ink);
+  font-family: "Be Vietnam Pro", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+#sky {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  cursor: crosshair;
+  z-index: 1;
+  background:
+    radial-gradient(ellipse 120% 80% at 50% -10%, #1a2a55 0%, transparent 55%),
+    radial-gradient(ellipse 90% 60% at 80% 20%, rgba(70, 40, 90, 0.35) 0%, transparent 50%),
+    linear-gradient(180deg, var(--night-mid) 0%, var(--night-deep) 62%, #08060f 100%);
+}
+
+.atmosphere {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.horizon {
+  position: absolute;
+  left: -10%;
+  right: -10%;
+  bottom: -8%;
+  height: 38%;
+  background:
+    radial-gradient(ellipse 70% 55% at 50% 100%, rgba(255, 170, 80, 0.18) 0%, transparent 70%),
+    linear-gradient(180deg, transparent 0%, rgba(12, 10, 22, 0.55) 55%, rgba(6, 5, 12, 0.92) 100%);
+}
+
+.vignette {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 75% 70% at 50% 45%, transparent 40%, rgba(0, 0, 0, 0.45) 100%);
+}
+
+.stage {
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  text-align: center;
+  gap: 0.35rem;
+  padding: 1.5rem;
+  pointer-events: none;
+  animation: rise-in 1.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.eyebrow {
+  font-size: clamp(0.7rem, 1.4vw, 0.85rem);
+  font-weight: 300;
+  letter-spacing: 0.42em;
+  text-transform: uppercase;
+  color: var(--gold-soft);
+  animation: soft-pulse 4.5s ease-in-out infinite;
+}
+
+.brand {
+  font-family: "Cormorant Garamond", Georgia, serif;
+  font-weight: 600;
+  font-size: clamp(5.5rem, 22vw, 12rem);
+  line-height: 0.9;
+  letter-spacing: 0.04em;
+  color: #fff8e7;
+  text-shadow:
+    0 0 40px rgba(240, 208, 120, 0.35),
+    0 0 90px rgba(255, 120, 60, 0.18),
+    0 2px 0 rgba(0, 0, 0, 0.25);
+  animation: brand-glow 5s ease-in-out infinite;
+}
+
+.wish {
+  margin-top: 0.4rem;
+  font-family: "Cormorant Garamond", Georgia, serif;
+  font-style: italic;
+  font-weight: 500;
+  font-size: clamp(1.35rem, 3.6vw, 2.35rem);
+  letter-spacing: 0.08em;
+  color: var(--mist);
+}
+
+.hint {
+  margin-top: 1.1rem;
+  font-size: 0.78rem;
+  font-weight: 300;
+  letter-spacing: 0.12em;
+  color: rgba(214, 228, 255, 0.45);
+  animation: hint-fade 3.2s ease-in-out infinite;
+}
+
+.countdown {
+  display: flex;
+  gap: clamp(0.85rem, 3vw, 1.75rem);
+  margin-top: 1.75rem;
+}
+
+.unit {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 3.2rem;
+}
+
+.unit span {
+  font-family: "Cormorant Garamond", Georgia, serif;
+  font-size: clamp(1.5rem, 4vw, 2.25rem);
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  color: #fff6df;
+  font-variant-numeric: tabular-nums;
+}
+
+.unit small {
+  font-size: 0.65rem;
+  font-weight: 300;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(214, 228, 255, 0.4);
+}
+
+.footer {
+  position: fixed;
+  z-index: 4;
+  left: 0;
+  right: 0;
+  bottom: 1.25rem;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.sound-btn {
+  pointer-events: auto;
+  appearance: none;
+  border: 1px solid rgba(240, 208, 120, 0.28);
+  background: rgba(8, 12, 28, 0.45);
+  color: var(--gold-soft);
+  font-family: "Be Vietnam Pro", sans-serif;
+  font-size: 0.72rem;
+  font-weight: 400;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  padding: 0.65rem 1.15rem;
+  backdrop-filter: blur(8px);
+  cursor: pointer;
+  transition: border-color 0.25s ease, color 0.25s ease, background 0.25s ease;
+}
+
+.sound-btn:hover,
+.sound-btn[aria-pressed="true"] {
+  border-color: rgba(240, 208, 120, 0.55);
+  color: var(--gold);
+  background: rgba(16, 20, 40, 0.6);
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes brand-glow {
+  0%,
+  100% {
+    text-shadow:
+      0 0 40px rgba(240, 208, 120, 0.3),
+      0 0 90px rgba(255, 120, 60, 0.15),
+      0 2px 0 rgba(0, 0, 0, 0.25);
+  }
+  50% {
+    text-shadow:
+      0 0 55px rgba(240, 208, 120, 0.48),
+      0 0 120px rgba(255, 90, 50, 0.28),
+      0 2px 0 rgba(0, 0, 0, 0.25);
+  }
+}
+
+@keyframes soft-pulse {
+  0%,
+  100% {
+    opacity: 0.7;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes hint-fade {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+@media (max-width: 520px) {
+  .countdown {
+    gap: 0.7rem;
+  }
+
+  .unit {
+    min-width: 2.6rem;
+  }
+
+  .hint {
+    max-width: 16rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stage,
+  .eyebrow,
+  .brand,
+  .hint {
+    animation: none;
+  }
+}

@@ -1,0 +1,472 @@
+(() => {
+  const canvas = document.getElementById("sky");
+  const ctx = canvas.getContext("2d", { alpha: false });
+  const yearLabel = document.getElementById("yearLabel");
+  const soundBtn = document.getElementById("soundBtn");
+  const countdownEls = {
+    days: document.querySelector('[data-unit="days"]'),
+    hours: document.querySelector('[data-unit="hours"]'),
+    mins: document.querySelector('[data-unit="mins"]'),
+    secs: document.querySelector('[data-unit="secs"]'),
+  };
+
+  const PALETTES = [
+    ["#ff6b4a", "#ffd166", "#fff1c1"],
+    ["#5eead4", "#67e8f9", "#e0f2fe"],
+    ["#f472b6", "#fb7185", "#fecdd3"],
+    ["#facc15", "#fb923c", "#fff7ed"],
+    ["#a78bfa", "#c4b5fd", "#ede9fe"],
+    ["#34d399", "#6ee7b7", "#ecfdf5"],
+    ["#38bdf8", "#818cf8", "#e0e7ff"],
+    ["#f87171", "#fda4af", "#ffe4e6"],
+  ];
+
+  let width = 0;
+  let height = 0;
+  let dpr = 1;
+  let rockets = [];
+  let particles = [];
+  let stars = [];
+  let lastTs = 0;
+  let autoTimer = 0;
+  let soundOn = false;
+  let audioCtx = null;
+
+  const nextNewYear = (() => {
+    const now = new Date();
+    let y = now.getFullYear() + 1;
+    // If still before Jan 1 this calendar year, count to this year's New Year
+    const thisNy = new Date(now.getFullYear(), 0, 1, 0, 0, 0);
+    if (now < thisNy) y = now.getFullYear();
+    return new Date(y, 0, 1, 0, 0, 0);
+  })();
+
+  yearLabel.textContent = String(nextNewYear.getFullYear());
+
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = Math.floor(width * dpr);
+    canvas.height = Math.floor(height * dpr);
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    seedStars();
+  }
+
+  function seedStars() {
+    const count = Math.floor((width * height) / 9000);
+    stars = Array.from({ length: count }, () => ({
+      x: Math.random() * width,
+      y: Math.random() * height * 0.72,
+      r: Math.random() * 1.3 + 0.2,
+      a: Math.random() * 0.55 + 0.15,
+      tw: Math.random() * Math.PI * 2,
+      sp: 0.4 + Math.random() * 1.2,
+    }));
+  }
+
+  function rand(min, max) {
+    return min + Math.random() * (max - min);
+  }
+
+  function pick(arr) {
+    return arr[(Math.random() * arr.length) | 0];
+  }
+
+  function ensureAudio() {
+    if (!audioCtx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
+      audioCtx = new AC();
+    }
+    if (audioCtx.state === "suspended") audioCtx.resume();
+    return audioCtx;
+  }
+
+  function boom(x, y, power = 1) {
+    if (!soundOn) return;
+    const ac = ensureAudio();
+    if (!ac) return;
+
+    const t = ac.currentTime;
+    const pan = ((x / width) * 2 - 1) * 0.7;
+
+    const noiseBuf = ac.createBuffer(1, ac.sampleRate * 0.35, ac.sampleRate);
+    const data = noiseBuf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / data.length, 2.2);
+    }
+
+    const src = ac.createBufferSource();
+    src.buffer = noiseBuf;
+
+    const filter = ac.createBiquadFilter();
+    filter.type = "bandpass";
+    filter.frequency.value = 180 + power * 420;
+    filter.Q.value = 0.7;
+
+    const gain = ac.createGain();
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(0.12 * power, t + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.32);
+
+    if (ac.createStereoPanner) {
+      const panner = ac.createStereoPanner();
+      panner.pan.value = pan;
+      src.connect(filter);
+      filter.connect(panner);
+      panner.connect(gain);
+    } else {
+      src.connect(filter);
+      filter.connect(gain);
+    }
+    gain.connect(ac.destination);
+    src.start(t);
+    src.stop(t + 0.35);
+
+    // Soft crackle layer
+    const osc = ac.createOscillator();
+    const og = ac.createGain();
+    osc.type = "triangle";
+    osc.frequency.setValueAtTime(90 + power * 40, t);
+    osc.frequency.exponentialRampToValueAtTime(40, t + 0.18);
+    og.gain.setValueAtTime(0.0001, t);
+    og.gain.exponentialRampToValueAtTime(0.045 * power, t + 0.008);
+    og.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
+    osc.connect(og);
+    og.connect(ac.destination);
+    osc.start(t);
+    osc.stop(t + 0.22);
+  }
+
+  function launch(x, targetY, palette, delay = 0) {
+    rockets.push({
+      x,
+      y: height + 10,
+      vx: rand(-0.35, 0.35),
+      vy: -rand(9.5, 13.2),
+      targetY: targetY ?? rand(height * 0.18, height * 0.42),
+      life: 0,
+      delay,
+      trail: [],
+      palette: palette || pick(PALETTES),
+      hueSpark: Math.random() > 0.45,
+    });
+  }
+
+  function explode(x, y, palette, style) {
+    const kind = style || pick(["peony", "chrys", "ring", "willow", "spark"]);
+    const base = palette || pick(PALETTES);
+    let count = 70;
+
+    if (kind === "peony") count = 90 + ((Math.random() * 40) | 0);
+    if (kind === "chrys") count = 110 + ((Math.random() * 50) | 0);
+    if (kind === "ring") count = 64;
+    if (kind === "willow") count = 80;
+    if (kind === "spark") count = 48;
+
+    boom(x, y, kind === "chrys" ? 1.15 : 0.9);
+
+    for (let i = 0; i < count; i++) {
+      const angle =
+        kind === "ring"
+          ? (i / count) * Math.PI * 2 + rand(-0.04, 0.04)
+          : rand(0, Math.PI * 2);
+      const speed =
+        kind === "ring"
+          ? rand(4.2, 5.1)
+          : kind === "willow"
+            ? rand(2.2, 5.8)
+            : kind === "spark"
+              ? rand(1.2, 3.4)
+              : rand(1.8, 7.4);
+
+      particles.push({
+        x,
+        y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        life: 1,
+        decay:
+          kind === "willow"
+            ? rand(0.008, 0.014)
+            : kind === "spark"
+              ? rand(0.018, 0.03)
+              : rand(0.01, 0.02),
+        gravity: kind === "willow" ? 0.045 : 0.028,
+        friction: kind === "willow" ? 0.985 : 0.972,
+        size: kind === "spark" ? rand(1.2, 2.2) : rand(1.4, 2.8),
+        color: pick(base),
+        glitter: Math.random() > 0.65,
+        willow: kind === "willow",
+      });
+    }
+
+    // Bright core flash particles
+    for (let i = 0; i < 12; i++) {
+      const a = rand(0, Math.PI * 2);
+      const s = rand(0.4, 2.2);
+      particles.push({
+        x,
+        y,
+        vx: Math.cos(a) * s,
+        vy: Math.sin(a) * s,
+        life: 1,
+        decay: rand(0.04, 0.07),
+        gravity: 0.01,
+        friction: 0.96,
+        size: rand(2, 4),
+        color: "#fff8e8",
+        glitter: true,
+        willow: false,
+      });
+    }
+  }
+
+  function finaleBurst() {
+    const cx = width * 0.5;
+    const cy = height * 0.32;
+    for (let i = 0; i < 7; i++) {
+      setTimeout(() => {
+        explode(
+          cx + rand(-width * 0.28, width * 0.28),
+          cy + rand(-height * 0.08, height * 0.12),
+          pick(PALETTES),
+          pick(["peony", "chrys", "ring", "willow"])
+        );
+      }, i * 180);
+    }
+  }
+
+  function updateCountdown() {
+    const now = Date.now();
+    let diff = nextNewYear.getTime() - now;
+    if (diff <= 0) {
+      countdownEls.days.textContent = "00";
+      countdownEls.hours.textContent = "00";
+      countdownEls.mins.textContent = "00";
+      countdownEls.secs.textContent = "00";
+      return;
+    }
+    const days = Math.floor(diff / 86400000);
+    diff %= 86400000;
+    const hours = Math.floor(diff / 3600000);
+    diff %= 3600000;
+    const mins = Math.floor(diff / 60000);
+    diff %= 60000;
+    const secs = Math.floor(diff / 1000);
+
+    countdownEls.days.textContent = String(days).padStart(2, "0");
+    countdownEls.hours.textContent = String(hours).padStart(2, "0");
+    countdownEls.mins.textContent = String(mins).padStart(2, "0");
+    countdownEls.secs.textContent = String(secs).padStart(2, "0");
+  }
+
+  function drawStars(t) {
+    for (const s of stars) {
+      const twinkle = 0.55 + 0.45 * Math.sin(t * 0.001 * s.sp + s.tw);
+      ctx.beginPath();
+      ctx.fillStyle = `rgba(230, 238, 255, ${s.a * twinkle})`;
+      ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function step(ts) {
+    if (!lastTs) lastTs = ts;
+    const dt = Math.min(32, ts - lastTs);
+    lastTs = ts;
+
+    // Trail fade
+    ctx.globalCompositeOperation = "source-over";
+    ctx.fillStyle = "rgba(5, 8, 20, 0.22)";
+    ctx.fillRect(0, 0, width, height);
+
+    drawStars(ts);
+
+    ctx.globalCompositeOperation = "lighter";
+
+    // Rockets
+    for (let i = rockets.length - 1; i >= 0; i--) {
+      const r = rockets[i];
+      if (r.delay > 0) {
+        r.delay -= dt;
+        continue;
+      }
+
+      r.x += r.vx;
+      r.y += r.vy;
+      r.vy += 0.035;
+      r.life += dt;
+      r.trail.push({ x: r.x, y: r.y, a: 1 });
+      if (r.trail.length > 12) r.trail.shift();
+
+      for (let t = 0; t < r.trail.length; t++) {
+        const p = r.trail[t];
+        const alpha = (t / r.trail.length) * 0.55;
+        ctx.beginPath();
+        ctx.fillStyle = `rgba(255, 230, 180, ${alpha})`;
+        ctx.arc(p.x, p.y, 1.4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.beginPath();
+      ctx.fillStyle = "#fff6d5";
+      ctx.arc(r.x, r.y, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+
+      if (r.hueSpark && Math.random() > 0.6) {
+        particles.push({
+          x: r.x,
+          y: r.y,
+          vx: rand(-0.4, 0.4),
+          vy: rand(0.2, 1.2),
+          life: 1,
+          decay: 0.05,
+          gravity: 0.02,
+          friction: 0.96,
+          size: 1.2,
+          color: pick(r.palette),
+          glitter: false,
+          willow: false,
+        });
+      }
+
+      if (r.vy >= -1.2 || r.y <= r.targetY) {
+        explode(r.x, r.y, r.palette);
+        rockets.splice(i, 1);
+      }
+    }
+
+    // Particles
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.vx *= p.friction;
+      p.vy *= p.friction;
+      p.vy += p.gravity;
+      p.x += p.vx;
+      p.y += p.vy;
+      p.life -= p.decay;
+
+      if (p.life <= 0) {
+        particles.splice(i, 1);
+        continue;
+      }
+
+      const alpha = Math.max(0, p.life);
+      ctx.beginPath();
+      ctx.fillStyle = hexToRgba(p.color, alpha);
+      ctx.arc(p.x, p.y, p.size * (0.5 + 0.5 * alpha), 0, Math.PI * 2);
+      ctx.fill();
+
+      if (p.glitter && Math.random() > 0.7) {
+        ctx.beginPath();
+        ctx.fillStyle = `rgba(255, 255, 255, ${alpha * 0.85})`;
+        ctx.arc(p.x, p.y, p.size * 0.35, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      if (p.willow && p.life < 0.55 && Math.random() > 0.82) {
+        particles.push({
+          x: p.x,
+          y: p.y,
+          vx: rand(-0.3, 0.3),
+          vy: rand(0.4, 1.5),
+          life: p.life * 0.7,
+          decay: 0.03,
+          gravity: 0.05,
+          friction: 0.98,
+          size: 1,
+          color: p.color,
+          glitter: true,
+          willow: false,
+        });
+      }
+    }
+
+    ctx.globalCompositeOperation = "source-over";
+
+    // Auto show
+    autoTimer -= dt;
+    if (autoTimer <= 0) {
+      const wave = Math.random();
+      if (wave > 0.92) {
+        finaleBurst();
+        autoTimer = rand(2800, 4200);
+      } else if (wave > 0.55) {
+        const n = 2 + ((Math.random() * 3) | 0);
+        for (let i = 0; i < n; i++) {
+          launch(
+            rand(width * 0.12, width * 0.88),
+            rand(height * 0.16, height * 0.4),
+            pick(PALETTES),
+            i * rand(120, 280)
+          );
+        }
+        autoTimer = rand(900, 1800);
+      } else {
+        launch(rand(width * 0.15, width * 0.85));
+        autoTimer = rand(450, 1100);
+      }
+    }
+
+    requestAnimationFrame(step);
+  }
+
+  function hexToRgba(hex, a) {
+    const h = hex.replace("#", "");
+    const full =
+      h.length === 3
+        ? h
+            .split("")
+            .map((c) => c + c)
+            .join("")
+        : h;
+    const n = parseInt(full, 16);
+    const r = (n >> 16) & 255;
+    const g = (n >> 8) & 255;
+    const b = n & 255;
+    return `rgba(${r}, ${g}, ${b}, ${a})`;
+  }
+
+  function pointerLaunch(clientX, clientY) {
+    const x = clientX;
+    const y = Math.min(clientY, height * 0.55);
+    launch(x, Math.max(height * 0.12, y));
+  }
+
+  canvas.addEventListener("pointerdown", (e) => {
+    pointerLaunch(e.clientX, e.clientY);
+  });
+
+  soundBtn.addEventListener("click", () => {
+    soundOn = !soundOn;
+    soundBtn.setAttribute("aria-pressed", String(soundOn));
+    soundBtn.textContent = soundOn ? "Tắt âm thanh" : "Bật âm thanh";
+    if (soundOn) ensureAudio();
+  });
+
+  window.addEventListener("resize", resize);
+
+  // Opening salvo
+  resize();
+  updateCountdown();
+  setInterval(updateCountdown, 1000);
+
+  for (let i = 0; i < 5; i++) {
+    launch(
+      rand(width * 0.2, width * 0.8),
+      rand(height * 0.2, height * 0.38),
+      pick(PALETTES),
+      400 + i * 350
+    );
+  }
+  autoTimer = 2200;
+
+  // First paint
+  ctx.fillStyle = "#050814";
+  ctx.fillRect(0, 0, width, height);
+  requestAnimationFrame(step);
+})();
