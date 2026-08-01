@@ -10,15 +10,22 @@
     secs: document.querySelector('[data-unit="secs"]'),
   };
 
-  const PALETTES = [
-    ["#ff6b4a", "#ffd166", "#fff1c1"],
-    ["#5eead4", "#67e8f9", "#e0f2fe"],
-    ["#f472b6", "#fb7185", "#fecdd3"],
-    ["#facc15", "#fb923c", "#fff7ed"],
-    ["#a78bfa", "#c4b5fd", "#ede9fe"],
-    ["#34d399", "#6ee7b7", "#ecfdf5"],
-    ["#38bdf8", "#818cf8", "#e0e7ff"],
-    ["#f87171", "#fda4af", "#ffe4e6"],
+  // Real firework shell types
+  const SHELLS = [
+    { name: "peony", colors: ["#ff2d2d", "#ff6a4d", "#ffc9a8"], glitter: false },
+    { name: "peony", colors: ["#2f8cff", "#78c0ff", "#d9eeff"], glitter: false },
+    { name: "peony", colors: ["#18c97a", "#6dffb0", "#d6ffea"], glitter: false },
+    { name: "chrys", colors: ["#ffd33d", "#ffe89a", "#fff6d8"], glitter: true },
+    { name: "kamuro", colors: ["#f0c040", "#ffdb70", "#fff0b8"], glitter: true },
+    { name: "willow", colors: ["#e8a820", "#f0c45a", "#ffe6a0"], glitter: true },
+    { name: "palm", colors: ["#ff7a18", "#ffb040", "#ffe0a8"], glitter: true },
+    { name: "ring", colors: ["#5ad0ff", "#9ae6ff", "#e8f9ff"], glitter: false },
+    { name: "diadem", colors: ["#ff4d6d", "#ff8fa3", "#ffe0e6"], glitter: true },
+    { name: "crossette", colors: ["#ffb703", "#ffd56a", "#fff2c2"], glitter: true },
+    { name: "strobe", colors: ["#ffffff", "#e8f0ff", "#c7d7ff"], glitter: true },
+    { name: "brocade", colors: ["#ffe566", "#fff1a8", "#ffffff"], glitter: true },
+    { name: "violet", colors: ["#a855f7", "#c4b5fd", "#ede9fe"], glitter: false },
+    { name: "fish", colors: ["#38bdf8", "#7dd3fc", "#e0f2fe"], glitter: true },
   ];
 
   let width = 0;
@@ -26,21 +33,19 @@
   let dpr = 1;
   let rockets = [];
   let particles = [];
+  let sparks = []; // tiny glitter trails
+  let flashes = [];
   let stars = [];
   let lastTs = 0;
   let autoTimer = 0;
   let soundOn = false;
   let audioCtx = null;
   let isMobile = false;
-  let particleScale = 1;
-  let fadeAlpha = 0.18;
-  let glowMode = "lighter";
-  let maxAlpha = 1;
+  let quality = 1; // 0.65 mobile .. 1 desktop
 
   const nextNewYear = (() => {
     const now = new Date();
     let y = now.getFullYear() + 1;
-    // If still before Jan 1 this calendar year, count to this year's New Year
     const thisNy = new Date(now.getFullYear(), 0, 1, 0, 0, 0);
     if (now < thisNy) y = now.getFullYear();
     return new Date(y, 0, 1, 0, 0, 0);
@@ -48,15 +53,21 @@
 
   yearLabel.textContent = String(nextNewYear.getFullYear());
 
+  function rand(a, b) {
+    return a + Math.random() * (b - a);
+  }
+  function pick(arr) {
+    return arr[(Math.random() * arr.length) | 0];
+  }
+  function clamp(v, a, b) {
+    return Math.max(a, Math.min(b, v));
+  }
+
   function resize() {
     width = window.innerWidth;
     height = window.innerHeight;
     isMobile = width <= 640 || ("ontouchstart" in window && width <= 900);
-    // Keep mobile lush but capped so it won't wash out white
-    particleScale = isMobile ? 0.72 : 1;
-    fadeAlpha = isMobile ? 0.2 : 0.15;
-    glowMode = "lighter";
-    maxAlpha = isMobile ? 0.58 : 1;
+    quality = isMobile ? 0.7 : 1;
     dpr = Math.min(window.devicePixelRatio || 1, isMobile ? 1.75 : 2);
     canvas.width = Math.floor(width * dpr);
     canvas.height = Math.floor(height * dpr);
@@ -67,45 +78,33 @@
   }
 
   function seedStars() {
-    const density = isMobile ? 14000 : 9000;
-    const count = Math.floor((width * height) / density);
-    stars = Array.from({ length: count }, () => ({
+    const n = Math.floor((width * height) / (isMobile ? 12000 : 8000));
+    stars = Array.from({ length: n }, () => ({
       x: Math.random() * width,
-      y: Math.random() * height * 0.72,
-      r: Math.random() * 1.3 + 0.2,
-      a: Math.random() * 0.55 + 0.15,
+      y: Math.random() * height * 0.7,
+      r: rand(0.3, 1.4),
+      a: rand(0.15, 0.6),
       tw: Math.random() * Math.PI * 2,
-      sp: 0.4 + Math.random() * 1.2,
+      sp: rand(0.4, 1.4),
     }));
   }
 
-  function rand(min, max) {
-    return min + Math.random() * (max - min);
-  }
-
-  function pick(arr) {
-    return arr[(Math.random() * arr.length) | 0];
-  }
-
-  // Short single-bang samples only (long whoosh/multi clips sound random vs visuals)
+  // ——— AUDIO: chỉ tiếng nổ pháo thật (file sạch, không rít/crackle) ———
   const SAMPLE_FILES = {
-    whistle: ["whistle.mp3"],
-    boom: ["bang.mp3", "clear.mp3", "small.mp3"],
+    boom: ["bang.mp3", "clear.mp3"],
   };
-
-  const sampleBuffers = { whistle: [], boom: [] };
+  const sampleBuffers = { boom: [] };
   let samplesReady = false;
   let samplesLoading = null;
   let activeBooms = 0;
-  const MAX_ACTIVE_BOOMS = 4;
 
   function soundBases() {
     const bases = [];
     try {
       bases.push(new URL("sounds/", window.location.href).href);
     } catch (_) {}
-    bases.push("https://ancoine6232.github.io/phaohoane/sounds/");
-    bases.push("https://raw.githubusercontent.com/ancoine6232/phaohoane/main/sounds/");
+    bases.push("./sounds/");
+    bases.push("sounds/");
     return [...new Set(bases)];
   }
 
@@ -120,14 +119,13 @@
   }
 
   async function fetchSoundArrayBuffer(file) {
-    const bases = soundBases();
     let lastErr = null;
-    for (const base of bases) {
+    for (const base of soundBases()) {
       const url = base.endsWith("/") ? base + file : base + "/" + file;
       try {
-        const res = await fetch(url, { cache: "force-cache", mode: "cors" });
+        const res = await fetch(url);
         if (!res.ok) {
-          lastErr = new Error(`HTTP ${res.status} ${url}`);
+          lastErr = new Error(`HTTP ${res.status}`);
           continue;
         }
         return await res.arrayBuffer();
@@ -135,7 +133,7 @@
         lastErr = err;
       }
     }
-    throw lastErr || new Error("No sound source");
+    throw lastErr || new Error("load fail");
   }
 
   async function decodeSound(ac, arrayBuffer) {
@@ -149,22 +147,20 @@
     }
   }
 
-  // Find the loudest moment so playback can start on the bang, not a random whoosh intro
   function findPeakOffset(buffer) {
     const data = buffer.getChannelData(0);
-    const step = Math.max(1, (data.length / 4000) | 0);
+    const step = Math.max(1, (data.length / 5000) | 0);
     let peak = 0;
-    let peakIndex = 0;
+    let idx = 0;
     for (let i = 0; i < data.length; i += step) {
       const v = Math.abs(data[i]);
       if (v > peak) {
         peak = v;
-        peakIndex = i;
+        idx = i;
       }
     }
-    // Start a hair before the peak so the attack stays natural
-    const lead = Math.floor(buffer.sampleRate * 0.02);
-    return Math.max(0, (peakIndex - lead) / buffer.sampleRate);
+    // Start slightly before the loudest bang in the recording
+    return Math.max(0, (idx - Math.floor(buffer.sampleRate * 0.02)) / buffer.sampleRate);
   }
 
   async function loadSamples() {
@@ -174,269 +170,258 @@
     if (samplesLoading) return samplesLoading;
 
     samplesLoading = (async () => {
-      sampleBuffers.whistle = [];
       sampleBuffers.boom = [];
-
-      const entries = Object.entries(SAMPLE_FILES);
-      await Promise.all(
-        entries.map(async ([key, files]) => {
-          const prepared = [];
-          for (const file of files) {
-            try {
-              const arr = await fetchSoundArrayBuffer(file);
-              const buf = await decodeSound(ac, arr);
-              prepared.push({
-                buffer: buf,
-                offset: key === "boom" ? findPeakOffset(buf) : 0,
-              });
-            } catch (err) {
-              console.warn("Sound load failed:", file, err);
-            }
-          }
-          sampleBuffers[key] = prepared;
-        })
-      );
-
+      for (const file of SAMPLE_FILES.boom) {
+        try {
+          const arr = await fetchSoundArrayBuffer(file);
+          const buf = await decodeSound(ac, arr);
+          sampleBuffers.boom.push({ buffer: buf, offset: findPeakOffset(buf) });
+        } catch (err) {
+          console.warn("sound fail", file, err);
+        }
+      }
       samplesReady = sampleBuffers.boom.length > 0;
       if (!samplesReady) samplesLoading = null;
       return samplesReady;
     })();
-
     return samplesLoading;
   }
 
-  function playSample(sample, opts = {}) {
-    if (!soundOn || !sample) return null;
+  // Play one clean firework bang only — no whistle / crackle / synth
+  function boomAt(x, y, power = 1) {
+    if (!soundOn || !samplesReady || !sampleBuffers.boom.length) return;
+    if (activeBooms >= 3) return;
+
     const ac = ensureAudio();
-    if (!ac) return null;
+    if (!ac) return;
 
-    const {
-      pan = 0,
-      volume = 0.7,
-      rate = 1,
-      duration = null,
-      offsetBoost = 0,
-    } = opts;
-
+    const pan = ((x / width) * 2 - 1) * 0.8;
+    const dist = 0.8 + (1 - clamp(y / height, 0, 1)) * 0.3;
+    const sample = pick(sampleBuffers.boom);
     const src = ac.createBufferSource();
     src.buffer = sample.buffer;
-    src.playbackRate.value = rate;
+    src.playbackRate.value = rand(0.97, 1.03);
 
-    const gain = ac.createGain();
+    const g = ac.createGain();
     const t = ac.currentTime;
-    const vol = Math.max(0.0001, volume);
-    gain.gain.setValueAtTime(vol, t);
-    // Quick fade-out so long tails don't linger randomly
-    const playDur =
-      duration != null
-        ? duration
-        : Math.min(0.55, (sample.buffer.duration - sample.offset) / rate);
-    gain.gain.setValueAtTime(vol, t + playDur * 0.55);
-    gain.gain.exponentialRampToValueAtTime(0.0001, t + playDur);
+    const vol = clamp(0.75 * power * dist * (1 / (1 + activeBooms * 0.35)), 0.25, 0.92);
+    g.gain.setValueAtTime(vol, t);
+    g.gain.setValueAtTime(vol * 0.55, t + 0.4);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.95);
 
     if (ac.createStereoPanner) {
       const panner = ac.createStereoPanner();
-      panner.pan.value = Math.max(-1, Math.min(1, pan));
-      src.connect(gain);
-      gain.connect(panner);
+      panner.pan.value = pan;
+      src.connect(g);
+      g.connect(panner);
       panner.connect(ac.destination);
     } else {
-      src.connect(gain);
-      gain.connect(ac.destination);
+      src.connect(g);
+      g.connect(ac.destination);
     }
 
-    const offset = Math.min(
-      sample.buffer.duration - 0.05,
-      Math.max(0, sample.offset + offsetBoost)
-    );
-    src.start(t, offset, playDur * rate + 0.02);
-    return { src, playDur };
-  }
-
-  function whoosh(x) {
-    if (!soundOn || !samplesReady) return;
-    const sample = pick(sampleBuffers.whistle);
-    if (!sample) return;
-    const pan = ((x / width) * 2 - 1) * 0.75;
-    // Short quiet whistle only — avoid constant screeching
-    playSample(sample, {
-      pan,
-      volume: isMobile ? 0.12 : 0.16,
-      rate: rand(0.95, 1.08),
-      duration: 0.35,
-      offsetBoost: 0,
-    });
-  }
-
-  function boom(x, y, power = 1, kind = "peony") {
-    if (!soundOn || !samplesReady) return;
-    if (!sampleBuffers.boom.length) return;
-
-    // Soft voice limit: still play, but quieter when many explode at once
-    if (activeBooms >= MAX_ACTIVE_BOOMS) return;
-
-    const pan = ((x / width) * 2 - 1) * 0.85;
-    const heightFactor = 0.7 + (1 - Math.min(1, y / height)) * 0.35;
-    const sample = pick(sampleBuffers.boom);
-    const baseVol = kind === "spark" ? 0.5 : 0.78;
-    const crowded = 1 / (1 + activeBooms * 0.35);
+    const offset = Math.min(sample.buffer.duration - 0.1, sample.offset);
+    const playLen = Math.min(0.95, sample.buffer.duration - offset);
+    src.start(t, offset, playLen);
 
     activeBooms += 1;
-    const played = playSample(sample, {
-      pan,
-      volume: Math.min(0.95, baseVol * power * heightFactor * crowded * (isMobile ? 0.85 : 1)),
-      rate: rand(0.94, 1.06),
-      duration: kind === "spark" ? 0.35 : 0.5,
-    });
-
-    const releaseMs = ((played && played.playDur) || 0.45) * 1000;
     setTimeout(() => {
       activeBooms = Math.max(0, activeBooms - 1);
-    }, releaseMs);
+    }, 650);
   }
 
-  function launch(x, targetY, palette, delay = 0, multi = false) {
+  // ——— VISUALS ———
+  function hexToRgba(hex, a) {
+    const h = hex.replace("#", "");
+    const full =
+      h.length === 3
+        ? h
+            .split("")
+            .map((c) => c + c)
+            .join("")
+        : h;
+    const n = parseInt(full, 16);
+    return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+  }
+
+  function launch(x, targetY, shell, delay = 0) {
+    const s = shell || pick(SHELLS);
     rockets.push({
       x,
-      y: height + 10,
-      vx: rand(-0.55, 0.55),
-      vy: -rand(10.5, 14.5),
-      targetY: targetY ?? rand(height * 0.12, height * 0.4),
-      life: 0,
+      y: height + 8,
+      vx: rand(-0.4, 0.4),
+      vy: -rand(11.5, 15.5),
+      targetY: targetY ?? rand(height * 0.12, height * 0.38),
       delay,
       trail: [],
-      palette: palette || pick(PALETTES),
-      hueSpark: Math.random() > 0.3,
-      multi,
-      whistled: false,
+      shell: s,
+      lit: false,
     });
   }
 
-  function explode(x, y, palette, style) {
-    const kind = style || pick(["peony", "chrys", "ring", "willow", "spark", "double"]);
-    const base = palette || pick(PALETTES);
-    let count = Math.floor(140 * particleScale);
+  function spawnStar(x, y, angle, speed, color, opts = {}) {
+    particles.push({
+      x,
+      y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: opts.life ?? 1,
+      decay: opts.decay ?? rand(0.008, 0.016),
+      gravity: opts.gravity ?? 0.035,
+      drag: opts.drag ?? 0.985,
+      size: opts.size ?? rand(1.6, 2.8),
+      color,
+      sparkle: opts.sparkle ?? Math.random() > 0.55,
+      willow: opts.willow ?? false,
+      strobe: opts.strobe ?? false,
+      fish: opts.fish ?? false,
+      crossette: opts.crossette ?? false,
+      splitAt: opts.splitAt ?? 0,
+      flicker: Math.random() * Math.PI * 2,
+    });
+  }
 
-    if (kind === "peony") count = Math.floor((160 + ((Math.random() * 60) | 0)) * particleScale);
-    if (kind === "chrys") count = Math.floor((200 + ((Math.random() * 80) | 0)) * particleScale);
-    if (kind === "ring") count = Math.floor(110 * particleScale);
-    if (kind === "willow") count = Math.floor(150 * particleScale);
-    if (kind === "spark") count = Math.floor(90 * particleScale);
-    if (kind === "double") count = Math.floor(130 * particleScale);
+  function explode(x, y, shell) {
+    const s = shell || pick(SHELLS);
+    const kind = s.name;
+    // Exactly one real bang per shell break
+    boomAt(x, y, kind === "kamuro" || kind === "chrys" ? 1.1 : 1);
 
-    boom(x, y, kind === "chrys" || kind === "double" ? 1.3 : kind === "spark" ? 0.75 : 1, kind);
+    flashes.push({ x, y, life: 1, r: rand(20, 38) });
 
-    const sizeMul = isMobile ? 1.05 : 1;
-    const glitterChance = isMobile ? 0.7 : 0.45;
+    const colors = s.colors;
+    const n = (base) => Math.floor(base * quality);
 
-    for (let i = 0; i < count; i++) {
-      const angle =
-        kind === "ring"
-          ? (i / count) * Math.PI * 2 + rand(-0.04, 0.04)
-          : rand(0, Math.PI * 2);
-      const speed =
-        kind === "ring"
-          ? rand(4.2, 5.4)
-          : kind === "willow"
-            ? rand(2.2, 6.2)
-            : kind === "spark"
-              ? rand(1.4, 3.6)
-              : rand(2.0, 7.5);
-
-      particles.push({
-        x,
-        y,
-        vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed,
-        life: 1,
-        decay:
-          kind === "willow"
-            ? rand(0.008, 0.014)
-            : kind === "spark"
-              ? rand(0.016, 0.028)
-              : rand(isMobile ? 0.01 : 0.008, isMobile ? 0.018 : 0.016),
-        gravity: kind === "willow" ? 0.042 : 0.026,
-        friction: kind === "willow" ? 0.987 : 0.975,
-        size: (kind === "spark" ? rand(1.4, 2.4) : rand(1.6, 3.1)) * sizeMul,
-        color: pick(base),
-        glitter: Math.random() > glitterChance,
-        willow: kind === "willow",
-      });
-    }
-
-    const coreCount = isMobile ? 10 : 28;
-    for (let i = 0; i < coreCount; i++) {
-      const a = rand(0, Math.PI * 2);
-      const s = rand(0.4, isMobile ? 2.2 : 3.2);
-      particles.push({
-        x,
-        y,
-        vx: Math.cos(a) * s,
-        vy: Math.sin(a) * s,
-        life: isMobile ? 0.8 : 1,
-        decay: rand(0.035, 0.06),
-        gravity: 0.01,
-        friction: 0.96,
-        size: rand(1.4, isMobile ? 2.8 : 5.5) * sizeMul,
-        color: isMobile ? pick(base) : "#fff8e8",
-        glitter: Math.random() > 0.5,
-        willow: false,
-      });
-    }
-
-    if ((kind === "double" || Math.random() > (isMobile ? 0.72 : 0.55))) {
-      const inner = pick(PALETTES);
-      const innerCount = isMobile ? 36 : 70;
-      for (let i = 0; i < innerCount; i++) {
-        const a = rand(0, Math.PI * 2);
-        const s = rand(1.2, 4.2);
-        particles.push({
-          x,
-          y,
-          vx: Math.cos(a) * s,
-          vy: Math.sin(a) * s,
-          life: 1,
-          decay: rand(0.012, 0.02),
+    if (kind === "ring") {
+      const count = n(100);
+      for (let i = 0; i < count; i++) {
+        const a = (i / count) * Math.PI * 2 + rand(-0.02, 0.02);
+        spawnStar(x, y, a, rand(5.8, 6.6), pick(colors), {
+          decay: rand(0.012, 0.018),
+          gravity: 0.028,
+          size: rand(1.8, 2.7),
+        });
+      }
+    } else if (kind === "willow" || kind === "kamuro") {
+      const count = n(kind === "kamuro" ? 200 : 140);
+      for (let i = 0; i < count; i++) {
+        spawnStar(x, y, rand(0, Math.PI * 2), rand(2.2, 7.8), pick(colors), {
+          decay: rand(0.004, 0.009),
+          gravity: 0.05,
+          drag: 0.992,
+          size: rand(1.2, 2.3),
+          willow: true,
+          sparkle: true,
+        });
+      }
+    } else if (kind === "palm") {
+      const arms = 8 + ((Math.random() * 4) | 0);
+      for (let a = 0; a < arms; a++) {
+        const baseAng = -Math.PI / 2 + rand(-1.1, 1.1);
+        for (let j = 0; j < n(14); j++) {
+          spawnStar(x, y, baseAng + rand(-0.15, 0.15), rand(4, 8.5), pick(colors), {
+            decay: rand(0.006, 0.012),
+            gravity: 0.06,
+            drag: 0.988,
+            size: rand(1.5, 2.6),
+            willow: true,
+            sparkle: true,
+          });
+        }
+      }
+    } else if (kind === "chrys" || kind === "brocade") {
+      for (let i = 0; i < n(170); i++) {
+        spawnStar(x, y, rand(0, Math.PI * 2), rand(2.6, 8.5), pick(colors), {
+          decay: rand(0.006, 0.013),
           gravity: 0.03,
-          friction: 0.97,
-          size: rand(1.3, 2.4) * sizeMul,
-          color: pick(inner),
-          glitter: true,
-          willow: false,
+          drag: 0.986,
+          size: rand(1.5, 2.9),
+          sparkle: true,
+          willow: Math.random() > 0.6,
+        });
+      }
+    } else if (kind === "diadem") {
+      for (let i = 0; i < n(110); i++) {
+        spawnStar(x, y, rand(0, Math.PI * 2), rand(3.5, 7.2), pick(colors), {
+          decay: rand(0.01, 0.016),
+          size: rand(1.7, 2.8),
+        });
+      }
+      for (let i = 0; i < n(40); i++) {
+        spawnStar(x, y, rand(0, Math.PI * 2), rand(0.8, 2.8), "#fff6d0", {
+          decay: rand(0.02, 0.035),
+          size: rand(2, 3.4),
+          sparkle: true,
+        });
+      }
+    } else if (kind === "crossette") {
+      for (let i = 0; i < n(70); i++) {
+        spawnStar(x, y, rand(0, Math.PI * 2), rand(3.2, 6.8), pick(colors), {
+          decay: rand(0.008, 0.014),
+          size: rand(1.8, 2.8),
+          sparkle: true,
+          crossette: true,
+          splitAt: rand(0.45, 0.7),
+        });
+      }
+    } else if (kind === "strobe") {
+      for (let i = 0; i < n(100); i++) {
+        spawnStar(x, y, rand(0, Math.PI * 2), rand(2.4, 6.5), pick(colors), {
+          decay: rand(0.008, 0.015),
+          gravity: 0.04,
+          size: rand(1.8, 3.2),
+          sparkle: true,
+          strobe: true,
+        });
+      }
+    } else if (kind === "fish") {
+      for (let i = 0; i < n(90); i++) {
+        const a = rand(-0.6, 0.6) + (Math.random() > 0.5 ? 0 : Math.PI);
+        spawnStar(x, y, a + rand(-0.3, 0.3), rand(3, 7), pick(colors), {
+          decay: rand(0.01, 0.018),
+          gravity: 0.02,
+          drag: 0.99,
+          size: rand(1.4, 2.4),
+          fish: true,
+          sparkle: true,
+        });
+      }
+    } else {
+      for (let i = 0; i < n(130); i++) {
+        spawnStar(x, y, rand(0, Math.PI * 2), rand(2.4, 7.4), pick(colors), {
+          decay: rand(0.01, 0.017),
+          gravity: 0.034,
+          size: rand(1.7, 3.1),
+          sparkle: s.glitter,
         });
       }
     }
+
+    for (let i = 0; i < n(14); i++) {
+      spawnStar(x, y, rand(0, Math.PI * 2), rand(0.4, 2.2), "#fff8e8", {
+        decay: rand(0.045, 0.07),
+        gravity: 0.01,
+        size: rand(2, 4),
+        sparkle: true,
+      });
+    }
   }
 
-  function finaleBurst() {
-    const cx = width * 0.5;
-    const cy = height * 0.3;
-    const bursts = isMobile ? 8 : 16;
-    for (let i = 0; i < bursts; i++) {
+  function finale() {
+    for (let i = 0; i < (isMobile ? 7 : 12); i++) {
       setTimeout(() => {
-        explode(
-          cx + rand(-width * 0.38, width * 0.38),
-          cy + rand(-height * 0.12, height * 0.16),
-          pick(PALETTES),
-          pick(["peony", "chrys", "ring", "willow", "double"])
+        launch(
+          rand(width * 0.1, width * 0.9),
+          rand(height * 0.14, height * 0.36),
+          pick(SHELLS),
+          0
         );
-      }, i * (isMobile ? 120 : 90));
-    }
-    const extra = isMobile ? 5 : 10;
-    for (let i = 0; i < extra; i++) {
-      launch(
-        rand(width * 0.08, width * 0.92),
-        rand(height * 0.12, height * 0.36),
-        pick(PALETTES),
-        80 + i * 110,
-        true
-      );
+      }, i * 140);
     }
   }
 
   function updateCountdown() {
-    const now = Date.now();
-    let diff = nextNewYear.getTime() - now;
+    let diff = nextNewYear.getTime() - Date.now();
     if (diff <= 0) {
       countdownEls.days.textContent = "00";
       countdownEls.hours.textContent = "00";
@@ -451,21 +436,10 @@
     const mins = Math.floor(diff / 60000);
     diff %= 60000;
     const secs = Math.floor(diff / 1000);
-
     countdownEls.days.textContent = String(days).padStart(2, "0");
     countdownEls.hours.textContent = String(hours).padStart(2, "0");
     countdownEls.mins.textContent = String(mins).padStart(2, "0");
     countdownEls.secs.textContent = String(secs).padStart(2, "0");
-  }
-
-  function drawStars(t) {
-    for (const s of stars) {
-      const twinkle = 0.55 + 0.45 * Math.sin(t * 0.001 * s.sp + s.tw);
-      ctx.beginPath();
-      ctx.fillStyle = `rgba(230, 238, 255, ${s.a * twinkle})`;
-      ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
-      ctx.fill();
-    }
   }
 
   function step(ts) {
@@ -473,14 +447,21 @@
     const dt = Math.min(32, ts - lastTs);
     lastTs = ts;
 
-    // Trail fade — stronger on mobile to avoid white washout
+    // Night sky persistence — soft trails without white washout
     ctx.globalCompositeOperation = "source-over";
-    ctx.fillStyle = `rgba(5, 8, 20, ${fadeAlpha})`;
+    ctx.fillStyle = `rgba(4, 7, 18, ${isMobile ? 0.18 : 0.14})`;
     ctx.fillRect(0, 0, width, height);
 
-    drawStars(ts);
+    // Stars
+    for (const s of stars) {
+      const tw = 0.5 + 0.5 * Math.sin(ts * 0.001 * s.sp + s.tw);
+      ctx.beginPath();
+      ctx.fillStyle = `rgba(220, 230, 255, ${s.a * tw})`;
+      ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
 
-    ctx.globalCompositeOperation = glowMode;
+    ctx.globalCompositeOperation = "lighter";
 
     // Rockets
     for (let i = rockets.length - 1; i >= 0; i--) {
@@ -489,202 +470,204 @@
         r.delay -= dt;
         continue;
       }
-
-      if (!r.whistled) {
-        r.whistled = true;
-        // Very rare whistle — only ~8% of rockets
-        if (soundOn && Math.random() < 0.08) whoosh(r.x);
+      if (!r.lit) {
+        r.lit = true;
       }
 
       r.x += r.vx;
       r.y += r.vy;
-      r.vy += 0.035;
-      r.life += dt;
-      r.trail.push({ x: r.x, y: r.y, a: 1 });
-      if (r.trail.length > (isMobile ? 18 : 14)) r.trail.shift();
+      r.vy += 0.042; // gravity slows climb like a real shell
+      r.trail.push({ x: r.x, y: r.y });
+      if (r.trail.length > 22) r.trail.shift();
 
-      // Smooth rising trail (line + dots) — avoids dotted look on phones
+      // Continuous ember trail
       if (r.trail.length > 1) {
         ctx.beginPath();
-        ctx.strokeStyle = "rgba(255, 220, 160, 0.45)";
-        ctx.lineWidth = isMobile ? 2 : 1.6;
+        ctx.strokeStyle = "rgba(255, 200, 120, 0.55)";
+        ctx.lineWidth = 2.2;
         ctx.lineCap = "round";
-        ctx.lineJoin = "round";
         ctx.moveTo(r.trail[0].x, r.trail[0].y);
-        for (let t = 1; t < r.trail.length; t++) {
-          ctx.lineTo(r.trail[t].x, r.trail[t].y);
-        }
+        for (let t = 1; t < r.trail.length; t++) ctx.lineTo(r.trail[t].x, r.trail[t].y);
         ctx.stroke();
       }
 
-      for (let t = 0; t < r.trail.length; t++) {
-        const p = r.trail[t];
-        const alpha = (t / r.trail.length) * 0.7;
-        ctx.beginPath();
-        ctx.fillStyle = `rgba(255, 230, 180, ${alpha})`;
-        ctx.arc(p.x, p.y, isMobile ? 1.8 : 1.4, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
+      // Bright head
       ctx.beginPath();
-      ctx.fillStyle = "#fff6d5";
-      ctx.arc(r.x, r.y, isMobile ? 2.8 : 2.2, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(255, 245, 210, 0.95)";
+      ctx.arc(r.x, r.y, 2.6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.fillStyle = "rgba(255, 160, 60, 0.35)";
+      ctx.arc(r.x, r.y, 6, 0, Math.PI * 2);
       ctx.fill();
 
-      if (r.hueSpark && Math.random() > 0.55) {
-        particles.push({
-          x: r.x,
-          y: r.y,
-          vx: rand(-0.4, 0.4),
-          vy: rand(0.2, 1.2),
+      // Ember sparks while rising
+      if (Math.random() > 0.5) {
+        sparks.push({
+          x: r.x + rand(-1, 1),
+          y: r.y + rand(0, 3),
+          vx: rand(-0.3, 0.3),
+          vy: rand(0.5, 1.5),
           life: 1,
-          decay: 0.05,
-          gravity: 0.02,
-          friction: 0.96,
-          size: isMobile ? 1.6 : 1.2,
-          color: pick(r.palette),
-          glitter: false,
-          willow: false,
+          decay: 0.06,
+          color: pick(r.shell.colors),
+          size: rand(0.8, 1.5),
         });
       }
 
-      if (r.vy >= -1.2 || r.y <= r.targetY) {
-        explode(r.x, r.y, r.palette, r.multi ? "double" : undefined);
-        if (r.multi || Math.random() > (isMobile ? 0.82 : 0.7)) {
-          explode(
-            r.x + rand(-50, 50),
-            r.y + rand(-30, 30),
-            pick(PALETTES),
-            pick(["peony", "spark", "ring"])
-          );
-        }
+      if (r.vy >= -0.8 || r.y <= r.targetY) {
+        explode(r.x, r.y, r.shell);
         rockets.splice(i, 1);
       }
     }
 
-    // Particles
+    // Main stars
     for (let i = particles.length - 1; i >= 0; i--) {
       const p = particles[i];
-      p.vx *= p.friction;
-      p.vy *= p.friction;
-      p.vy += p.gravity;
-      p.x += p.vx;
-      p.y += p.vy;
-      p.life -= p.decay;
+
+      if (p.fish) {
+        p.vx += Math.sin(p.flicker * 2.2) * 0.08;
+        p.vy += Math.cos(p.flicker * 1.6) * 0.04;
+      }
+
+      p.vx *= p.drag;
+      p.vy *= p.drag;
+      p.vy += p.gravity * (dt / 16);
+      p.x += p.vx * (dt / 16) * 0.95;
+      p.y += p.vy * (dt / 16) * 0.95;
+      p.life -= p.decay * (dt / 16);
+      p.flicker += p.strobe ? 0.9 : 0.35;
+
+      // Crossette: star breaks into 4 (visual only, no sound)
+      if (p.crossette && p.life < p.splitAt) {
+        p.crossette = false;
+        for (let k = 0; k < 4; k++) {
+          const a = (k / 4) * Math.PI * 2 + rand(-0.2, 0.2);
+          spawnStar(p.x, p.y, a, rand(1.8, 3.4), p.color, {
+            decay: 0.025,
+            size: p.size * 0.7,
+            sparkle: true,
+            life: p.life * 0.9,
+          });
+        }
+        particles.splice(i, 1);
+        continue;
+      }
 
       if (p.life <= 0) {
         particles.splice(i, 1);
         continue;
       }
 
-      const life = Math.min(1, p.life);
-      const alpha = Math.max(0, life) * maxAlpha;
-      const radius = p.size * (0.55 + 0.55 * life);
+      const flicker = p.strobe
+        ? Math.sin(p.flicker * 3) > 0
+          ? 1
+          : 0.15
+        : p.sparkle
+          ? 0.65 + 0.35 * Math.abs(Math.sin(p.flicker))
+          : 1;
+      const a = clamp(p.life * flicker, 0, 1) * (isMobile ? 0.75 : 0.95);
+      const rad = p.size * (0.5 + 0.5 * p.life);
 
-      // Soft halo so sparks look like light, not hard pixels
+      // Soft bloom
       ctx.beginPath();
-      ctx.fillStyle = hexToRgba(p.color, alpha * 0.28);
-      ctx.arc(p.x, p.y, radius * (isMobile ? 2.4 : 2.0), 0, Math.PI * 2);
+      ctx.fillStyle = hexToRgba(p.color, a * 0.22);
+      ctx.arc(p.x, p.y, rad * 2.6, 0, Math.PI * 2);
       ctx.fill();
 
       ctx.beginPath();
-      ctx.fillStyle = hexToRgba(p.color, alpha);
-      ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+      ctx.fillStyle = hexToRgba(p.color, a);
+      ctx.arc(p.x, p.y, rad, 0, Math.PI * 2);
       ctx.fill();
 
-      if (p.glitter && Math.random() > (isMobile ? 0.82 : 0.7)) {
+      // Hot tip
+      if (p.sparkle && Math.random() > 0.7) {
         ctx.beginPath();
-        ctx.fillStyle = `rgba(255, 250, 230, ${alpha * (isMobile ? 0.45 : 0.75)})`;
-        ctx.arc(p.x, p.y, radius * 0.35, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(255, 250, 230, ${a * 0.55})`;
+        ctx.arc(p.x, p.y, rad * 0.35, 0, Math.PI * 2);
         ctx.fill();
       }
 
-      if (p.willow && p.life < 0.55 && Math.random() > 0.82 && particles.length < (isMobile ? 2800 : 4500)) {
-        particles.push({
+      // Willow gold dust
+      if (p.willow && p.life < 0.7 && Math.random() > 0.78 && sparks.length < 2500) {
+        sparks.push({
           x: p.x,
           y: p.y,
-          vx: rand(-0.3, 0.3),
-          vy: rand(0.4, 1.5),
-          life: p.life * 0.7,
-          decay: 0.03,
-          gravity: 0.05,
-          friction: 0.98,
-          size: isMobile ? 1.3 : 1,
+          vx: rand(-0.4, 0.4),
+          vy: rand(0.3, 1.4),
+          life: p.life * 0.8,
+          decay: 0.025,
           color: p.color,
-          glitter: true,
-          willow: false,
+          size: rand(0.7, 1.3),
         });
       }
     }
 
+    // Sparks / glitter
+    for (let i = sparks.length - 1; i >= 0; i--) {
+      const s = sparks[i];
+      s.x += s.vx;
+      s.y += s.vy;
+      s.vy += 0.04;
+      s.life -= s.decay;
+      if (s.life <= 0) {
+        sparks.splice(i, 1);
+        continue;
+      }
+      ctx.beginPath();
+      ctx.fillStyle = hexToRgba(s.color, s.life * 0.7);
+      ctx.arc(s.x, s.y, s.size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Burst flashes
+    for (let i = flashes.length - 1; i >= 0; i--) {
+      const f = flashes[i];
+      f.life -= 0.08;
+      if (f.life <= 0) {
+        flashes.splice(i, 1);
+        continue;
+      }
+      ctx.beginPath();
+      ctx.fillStyle = `rgba(255, 245, 220, ${f.life * 0.35})`;
+      ctx.arc(f.x, f.y, f.r * (1.2 - f.life * 0.4), 0, Math.PI * 2);
+      ctx.fill();
+    }
+
     ctx.globalCompositeOperation = "source-over";
 
-    // Auto show — dense continuous barrage
+    // Auto show pacing — like a real display, not machine-gun
     autoTimer -= dt;
     if (autoTimer <= 0) {
-      const wave = Math.random();
-      if (wave > 0.82) {
-        finaleBurst();
-        autoTimer = rand(isMobile ? 2200 : 1600, isMobile ? 3400 : 2600);
-      } else if (wave > 0.35) {
-        const n = isMobile ? 3 + ((Math.random() * 3) | 0) : 4 + ((Math.random() * 5) | 0);
+      const roll = Math.random();
+      if (roll > 0.88) {
+        finale();
+        autoTimer = rand(3200, 4800);
+      } else if (roll > 0.4) {
+        const n = isMobile ? 2 + ((Math.random() * 2) | 0) : 3 + ((Math.random() * 3) | 0);
         for (let i = 0; i < n; i++) {
           launch(
-            rand(width * 0.06, width * 0.94),
-            rand(height * 0.1, height * 0.42),
-            pick(PALETTES),
-            i * rand(40, 140),
-            Math.random() > 0.5
+            rand(width * 0.12, width * 0.88),
+            rand(height * 0.14, height * 0.38),
+            pick(SHELLS),
+            i * rand(180, 320)
           );
         }
-        autoTimer = rand(isMobile ? 420 : 280, isMobile ? 850 : 650);
+        autoTimer = rand(900, 1600);
       } else {
-        const n = isMobile ? 2 + ((Math.random() * 2) | 0) : 2 + ((Math.random() * 2) | 0);
-        for (let i = 0; i < n; i++) {
-          launch(
-            rand(width * 0.1, width * 0.9),
-            undefined,
-            pick(PALETTES),
-            i * 60,
-            true
-          );
-        }
-        autoTimer = rand(isMobile ? 320 : 180, isMobile ? 700 : 420);
+        launch(rand(width * 0.15, width * 0.85), undefined, pick(SHELLS), 0);
+        autoTimer = rand(500, 1000);
       }
     }
 
     requestAnimationFrame(step);
   }
 
-  function hexToRgba(hex, a) {
-    const h = hex.replace("#", "");
-    const full =
-      h.length === 3
-        ? h
-            .split("")
-            .map((c) => c + c)
-            .join("")
-        : h;
-    const n = parseInt(full, 16);
-    const r = (n >> 16) & 255;
-    const g = (n >> 8) & 255;
-    const b = n & 255;
-    return `rgba(${r}, ${g}, ${b}, ${a})`;
-  }
-
-  function pointerLaunch(clientX, clientY) {
-    const x = clientX;
-    const y = Math.min(clientY, height * 0.55);
-    const target = Math.max(height * 0.1, y);
-    const n = isMobile ? 3 : 5;
+  function pointerLaunch(x, y) {
+    const target = Math.max(height * 0.12, Math.min(y, height * 0.5));
+    const n = isMobile ? 2 : 3;
     for (let i = 0; i < n; i++) {
-      launch(
-        x + rand(-70, 70),
-        target + rand(-40, 40),
-        pick(PALETTES),
-        i * 70,
-        true
-      );
+      launch(x + rand(-40, 40), target + rand(-30, 30), pick(SHELLS), i * 90);
     }
   }
 
@@ -697,6 +680,7 @@
       soundBtn.textContent = "Đang tải âm thanh…";
       soundBtn.disabled = true;
       try {
+        ensureAudio();
         const ok = await loadSamples();
         if (!ok) {
           soundBtn.textContent = "Thử lại âm thanh";
@@ -706,7 +690,6 @@
         soundOn = true;
         soundBtn.setAttribute("aria-pressed", "true");
         soundBtn.textContent = "Tắt âm thanh";
-        ensureAudio();
       } catch (err) {
         console.warn(err);
         soundBtn.textContent = "Thử lại âm thanh";
@@ -721,25 +704,22 @@
 
   window.addEventListener("resize", resize);
 
-  // Opening salvo
   resize();
   updateCountdown();
   setInterval(updateCountdown, 1000);
 
-  const opening = isMobile ? 7 : 14;
-  for (let i = 0; i < opening; i++) {
+  // Opening: spaced shells like a real show start
+  for (let i = 0; i < (isMobile ? 5 : 8); i++) {
     launch(
-      rand(width * 0.08, width * 0.92),
-      rand(height * 0.12, height * 0.4),
-      pick(PALETTES),
-      120 + i * 110,
-      true
+      rand(width * 0.15, width * 0.85),
+      rand(height * 0.16, height * 0.36),
+      pick(SHELLS),
+      300 + i * 280
     );
   }
-  autoTimer = 900;
+  autoTimer = 1600;
 
-  // First paint
-  ctx.fillStyle = "#050814";
+  ctx.fillStyle = "#040712";
   ctx.fillRect(0, 0, width, height);
   requestAnimationFrame(step);
 })();
