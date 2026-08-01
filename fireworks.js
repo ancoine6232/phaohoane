@@ -86,250 +86,150 @@
     return arr[(Math.random() * arr.length) | 0];
   }
 
-  let noiseCache = null;
+  // Real firework samples (Mixkit — free license)
+  const SAMPLE_URLS = {
+    whistle: ["sounds/whistle.mp3"],
+    boom: [
+      "sounds/bang.mp3",
+      "sounds/clear.mp3",
+      "sounds/small.mp3",
+      "sounds/rockets.mp3",
+      "sounds/whoosh-boom.mp3",
+      "sounds/whoosh-bangs.mp3",
+    ],
+    multi: ["sounds/multi.mp3", "sounds/several.mp3"],
+  };
+
+  const sampleBuffers = { whistle: [], boom: [], multi: [] };
+  let samplesReady = false;
+  let samplesLoading = null;
+  let lastBoomAt = 0;
 
   function ensureAudio() {
     if (!audioCtx) {
       const AC = window.AudioContext || window.webkitAudioContext;
       if (!AC) return null;
       audioCtx = new AC();
-      noiseCache = null;
     }
     if (audioCtx.state === "suspended") audioCtx.resume();
     return audioCtx;
   }
 
-  function getNoise(ac, seconds = 1) {
-    if (!noiseCache || noiseCache.sampleRate !== ac.sampleRate) {
-      const len = Math.floor(ac.sampleRate * 1.2);
-      const buf = ac.createBuffer(1, len, ac.sampleRate);
-      const data = buf.getChannelData(0);
-      let last = 0;
-      // Pink-ish noise — warmer, closer to real explosion air
-      for (let i = 0; i < len; i++) {
-        const white = Math.random() * 2 - 1;
-        last = (last + 0.02 * white) / 1.02;
-        data[i] = white * 0.35 + last * 3.2;
-      }
-      noiseCache = buf;
-    }
-    return noiseCache;
+  async function loadSamples() {
+    const ac = ensureAudio();
+    if (!ac) return false;
+    if (samplesReady) return true;
+    if (samplesLoading) return samplesLoading;
+
+    samplesLoading = (async () => {
+      const entries = Object.entries(SAMPLE_URLS);
+      await Promise.all(
+        entries.map(async ([key, urls]) => {
+          const buffers = [];
+          for (const url of urls) {
+            try {
+              const res = await fetch(url);
+              if (!res.ok) continue;
+              const arr = await res.arrayBuffer();
+              const buf = await ac.decodeAudioData(arr.slice(0));
+              buffers.push(buf);
+            } catch (err) {
+              console.warn("Sound load failed:", url, err);
+            }
+          }
+          sampleBuffers[key] = buffers;
+        })
+      );
+      samplesReady =
+        sampleBuffers.boom.length > 0 ||
+        sampleBuffers.whistle.length > 0 ||
+        sampleBuffers.multi.length > 0;
+      return samplesReady;
+    })();
+
+    return samplesLoading;
   }
 
-  function makeImpulse(ac, duration = 0.04) {
-    const len = Math.max(1, Math.floor(ac.sampleRate * duration));
-    const buf = ac.createBuffer(1, len, ac.sampleRate);
-    const data = buf.getChannelData(0);
-    for (let i = 0; i < len; i++) {
-      const env = Math.pow(1 - i / len, 8);
-      data[i] = (Math.random() * 2 - 1) * env;
-    }
-    return buf;
-  }
+  function playBuffer(buffer, opts = {}) {
+    if (!soundOn || !buffer) return;
+    const ac = ensureAudio();
+    if (!ac) return;
 
-  function masterBus(ac, pan) {
+    const {
+      pan = 0,
+      volume = 0.7,
+      rate = 1,
+      when = 0,
+    } = opts;
+
+    const src = ac.createBufferSource();
+    src.buffer = buffer;
+    src.playbackRate.value = rate;
+
     const gain = ac.createGain();
+    gain.gain.value = Math.max(0.0001, volume);
+
     if (ac.createStereoPanner) {
       const panner = ac.createStereoPanner();
       panner.pan.value = Math.max(-1, Math.min(1, pan));
-      panner.connect(gain);
+      src.connect(gain);
+      gain.connect(panner);
+      panner.connect(ac.destination);
+    } else {
+      src.connect(gain);
       gain.connect(ac.destination);
-      return { input: panner, gain };
     }
-    gain.connect(ac.destination);
-    return { input: gain, gain };
+
+    const t = ac.currentTime + when;
+    src.start(t);
+    src.stop(t + buffer.duration / rate + 0.05);
   }
 
-  // Rising whistle + hiss while the shell climbs
   function whoosh(x) {
-    if (!soundOn) return;
-    const ac = ensureAudio();
-    if (!ac) return;
-
-    const t = ac.currentTime;
-    const pan = ((x / width) * 2 - 1) * 0.7;
-    const bus = masterBus(ac, pan);
-    const dur = rand(0.55, 0.85);
-
-    // Classic firework whistle
-    const osc = ac.createOscillator();
-    osc.type = "sine";
-    const startF = rand(420, 580);
-    const peakF = rand(1400, 2200);
-    osc.frequency.setValueAtTime(startF, t);
-    osc.frequency.exponentialRampToValueAtTime(peakF, t + dur * 0.75);
-    osc.frequency.exponentialRampToValueAtTime(peakF * 0.7, t + dur);
-
-    const oscGain = ac.createGain();
-    oscGain.gain.setValueAtTime(0.0001, t);
-    oscGain.gain.exponentialRampToValueAtTime(0.07, t + 0.12);
-    oscGain.gain.setValueAtTime(0.06, t + dur * 0.7);
-    oscGain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    osc.connect(oscGain);
-    oscGain.connect(bus.input);
-    osc.start(t);
-    osc.stop(t + dur + 0.02);
-
-    // Air hiss around the whistle
-    const hiss = ac.createBufferSource();
-    hiss.buffer = getNoise(ac);
-    hiss.loop = true;
-    const bp = ac.createBiquadFilter();
-    bp.type = "bandpass";
-    bp.Q.value = 2.2;
-    bp.frequency.setValueAtTime(600, t);
-    bp.frequency.exponentialRampToValueAtTime(2400, t + dur * 0.7);
-
-    const hissGain = ac.createGain();
-    hissGain.gain.setValueAtTime(0.0001, t);
-    hissGain.gain.exponentialRampToValueAtTime(0.045, t + 0.1);
-    hissGain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-
-    hiss.connect(bp);
-    bp.connect(hissGain);
-    hissGain.connect(bus.input);
-    hiss.start(t);
-    hiss.stop(t + dur + 0.02);
-  }
-
-  // Scattered spark pops after the main bang
-  function cracklePop(ac, t, pan, power, kind) {
-    const heavy = kind === "chrys" || kind === "willow" || kind === "double";
-    const pops = (heavy ? 14 : 8) + ((Math.random() * 10 * power) | 0);
-
-    for (let i = 0; i < pops; i++) {
-      const when = t + 0.05 + i * rand(0.018, 0.055) + Math.random() * 0.12;
-      const bus = masterBus(ac, pan + rand(-0.35, 0.35));
-
-      // Tiny metallic click
-      const click = ac.createOscillator();
-      click.type = "square";
-      click.frequency.value = rand(1800, 5200);
-      const clickGain = ac.createGain();
-      const vol = (0.012 + Math.random() * 0.028) * power;
-      clickGain.gain.setValueAtTime(0.0001, when);
-      clickGain.gain.exponentialRampToValueAtTime(vol, when + 0.0015);
-      clickGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.03);
-      click.connect(clickGain);
-      clickGain.connect(bus.input);
-      click.start(when);
-      click.stop(when + 0.035);
-
-      // Short noise spit
-      const spit = ac.createBufferSource();
-      spit.buffer = makeImpulse(ac, 0.035);
-      const hp = ac.createBiquadFilter();
-      hp.type = "highpass";
-      hp.frequency.value = rand(2200, 6000);
-      const spitGain = ac.createGain();
-      spitGain.gain.value = vol * 1.4;
-      spit.connect(hp);
-      hp.connect(spitGain);
-      spitGain.connect(bus.input);
-      spit.start(when);
-      spit.stop(when + 0.04);
-    }
+    if (!soundOn || !samplesReady) return;
+    const buf = pick(sampleBuffers.whistle);
+    if (!buf) return;
+    const pan = ((x / width) * 2 - 1) * 0.75;
+    playBuffer(buf, {
+      pan,
+      volume: isMobile ? 0.35 : 0.45,
+      rate: rand(0.92, 1.12),
+    });
   }
 
   function boom(x, y, power = 1, kind = "peony") {
-    if (!soundOn) return;
-    const ac = ensureAudio();
-    if (!ac) return;
+    if (!soundOn || !samplesReady) return;
 
-    const t = ac.currentTime;
-    const pan = ((x / width) * 2 - 1) * 0.8;
-    // Higher bursts sound a bit more distant / airy
-    const heightFactor = 0.75 + (1 - Math.min(1, y / height)) * 0.4;
-    const p = power * heightFactor * (isMobile ? 0.85 : 1);
-    const bus = masterBus(ac, pan);
+    const now = performance.now();
+    // Avoid overlapping into a wall of noise
+    if (now - lastBoomAt < (isMobile ? 90 : 55)) return;
+    lastBoomAt = now;
 
-    // 1) Sub-bass pressure wave — the "đoàng" in your chest
-    const sub = ac.createOscillator();
-    sub.type = "sine";
-    const subStart = kind === "spark" ? 110 : 70 + p * 25;
-    sub.frequency.setValueAtTime(subStart, t);
-    sub.frequency.exponentialRampToValueAtTime(22, t + 0.42);
-    const subGain = ac.createGain();
-    subGain.gain.setValueAtTime(0.0001, t);
-    subGain.gain.exponentialRampToValueAtTime(0.7 * p, t + 0.006);
-    subGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.45);
-    sub.connect(subGain);
-    subGain.connect(bus.input);
-    sub.start(t);
-    sub.stop(t + 0.48);
+    const pan = ((x / width) * 2 - 1) * 0.85;
+    const heightFactor = 0.65 + (1 - Math.min(1, y / height)) * 0.45;
+    const pool =
+      (kind === "double" || kind === "chrys") && sampleBuffers.multi.length
+        ? sampleBuffers.multi
+        : sampleBuffers.boom;
+    const buf = pick(pool.length ? pool : sampleBuffers.boom);
+    if (!buf) return;
 
-    // 2) Mid boom body (slightly higher sine + triangle mix feel)
-    const body = ac.createOscillator();
-    body.type = "triangle";
-    body.frequency.setValueAtTime(160 + p * 40, t);
-    body.frequency.exponentialRampToValueAtTime(45, t + 0.22);
-    const bodyGain = ac.createGain();
-    bodyGain.gain.setValueAtTime(0.0001, t);
-    bodyGain.gain.exponentialRampToValueAtTime(0.28 * p, t + 0.004);
-    bodyGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.25);
-    body.connect(bodyGain);
-    bodyGain.connect(bus.input);
-    body.start(t);
-    body.stop(t + 0.28);
+    const baseVol = kind === "spark" ? 0.45 : 0.72;
+    playBuffer(buf, {
+      pan,
+      volume: Math.min(1, baseVol * power * heightFactor * (isMobile ? 0.8 : 1)),
+      rate: rand(0.88, 1.15),
+    });
 
-    // 3) Explosive air blast (filtered noise)
-    const blast = ac.createBufferSource();
-    blast.buffer = getNoise(ac);
-    const blastFilter = ac.createBiquadFilter();
-    blastFilter.type = "lowpass";
-    const openF = kind === "spark" ? 2400 : 1400 + p * 600;
-    blastFilter.frequency.setValueAtTime(openF, t);
-    blastFilter.frequency.exponentialRampToValueAtTime(120, t + 0.5);
-    blastFilter.Q.value = 0.7;
-
-    const blastGain = ac.createGain();
-    blastGain.gain.setValueAtTime(0.0001, t);
-    blastGain.gain.exponentialRampToValueAtTime(0.55 * p, t + 0.004);
-    blastGain.gain.exponentialRampToValueAtTime(0.12 * p, t + 0.12);
-    blastGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.55);
-
-    blast.connect(blastFilter);
-    blastFilter.connect(blastGain);
-    blastGain.connect(bus.input);
-    blast.start(t);
-    blast.stop(t + 0.56);
-
-    // 4) Sharp crack at the front — the "tách" before the boom bloom
-    const crack = ac.createBufferSource();
-    crack.buffer = makeImpulse(ac, 0.05);
-    const crackHp = ac.createBiquadFilter();
-    crackHp.type = "highpass";
-    crackHp.frequency.value = 900;
-    const crackGain = ac.createGain();
-    crackGain.gain.setValueAtTime(0.0001, t);
-    crackGain.gain.exponentialRampToValueAtTime(0.45 * p, t + 0.001);
-    crackGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.06);
-    crack.connect(crackHp);
-    crackHp.connect(crackGain);
-    crackGain.connect(bus.input);
-    crack.start(t);
-    crack.stop(t + 0.07);
-
-    // 5) Short outdoor echo / air ring
-    const echo = ac.createBufferSource();
-    echo.buffer = getNoise(ac);
-    const echoFilter = ac.createBiquadFilter();
-    echoFilter.type = "bandpass";
-    echoFilter.frequency.value = 700;
-    echoFilter.Q.value = 0.8;
-    const echoGain = ac.createGain();
-    const echoAt = t + 0.08;
-    echoGain.gain.setValueAtTime(0.0001, echoAt);
-    echoGain.gain.exponentialRampToValueAtTime(0.12 * p, echoAt + 0.02);
-    echoGain.gain.exponentialRampToValueAtTime(0.0001, echoAt + 0.35);
-    echo.connect(echoFilter);
-    echoFilter.connect(echoGain);
-    echoGain.connect(bus.input);
-    echo.start(echoAt);
-    echo.stop(echoAt + 0.4);
-
-    // 6) Sparkle crackles
-    cracklePop(ac, t, pan, p, kind);
+    // Occasional layered second crack for denser shells
+    if (!isMobile && power > 1.1 && Math.random() > 0.55 && sampleBuffers.boom.length) {
+      playBuffer(pick(sampleBuffers.boom), {
+        pan: pan + rand(-0.2, 0.2),
+        volume: 0.28 * power,
+        rate: rand(1.05, 1.25),
+        when: 0.04,
+      });
+    }
   }
 
   function launch(x, targetY, palette, delay = 0, multi = false) {
@@ -528,7 +428,7 @@
 
       if (!r.whistled) {
         r.whistled = true;
-        if (Math.random() > (isMobile ? 0.55 : 0.25)) whoosh(r.x);
+        if (soundOn && Math.random() > (isMobile ? 0.4 : 0.15)) whoosh(r.x);
       }
 
       r.x += r.vx;
@@ -705,11 +605,26 @@
     pointerLaunch(e.clientX, e.clientY);
   });
 
-  soundBtn.addEventListener("click", () => {
-    soundOn = !soundOn;
-    soundBtn.setAttribute("aria-pressed", String(soundOn));
-    soundBtn.textContent = soundOn ? "Tắt âm thanh" : "Bật âm thanh";
-    if (soundOn) ensureAudio();
+  soundBtn.addEventListener("click", async () => {
+    if (!soundOn) {
+      soundBtn.textContent = "Đang tải âm thanh…";
+      soundBtn.disabled = true;
+      const ok = await loadSamples();
+      soundBtn.disabled = false;
+      if (!ok) {
+        soundBtn.textContent = "Không tải được âm thanh";
+        return;
+      }
+      soundOn = true;
+      soundBtn.setAttribute("aria-pressed", "true");
+      soundBtn.textContent = "Tắt âm thanh";
+      // Warm-up click so mobile browsers unlock audio
+      ensureAudio();
+    } else {
+      soundOn = false;
+      soundBtn.setAttribute("aria-pressed", "false");
+      soundBtn.textContent = "Bật âm thanh";
+    }
   });
 
   window.addEventListener("resize", resize);

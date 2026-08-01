@@ -10,7 +10,10 @@ Mở file `index.html` bằng trình duyệt, hoặc:
 npx serve .
 ```
 
-## Đưa lên GitHub Pages
+## Âm thanh
+
+Tiếng pháo dùng mẫu miễn phí từ [Mixkit](https://mixkit.co/free-sound-effects/fireworks/) (Mixkit License).
+
 
 ```bash
 git init
