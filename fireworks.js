@@ -33,6 +33,9 @@
   let audioCtx = null;
   let isMobile = false;
   let particleScale = 1;
+  let fadeAlpha = 0.18;
+  let glowMode = "lighter";
+  let maxAlpha = 1;
 
   const nextNewYear = (() => {
     const now = new Date();
@@ -49,8 +52,11 @@
     width = window.innerWidth;
     height = window.innerHeight;
     isMobile = width <= 640 || ("ontouchstart" in window && width <= 900);
-    particleScale = isMobile ? 0.55 : 1;
-    dpr = Math.min(window.devicePixelRatio || 1, isMobile ? 1.5 : 2);
+    particleScale = isMobile ? 0.42 : 1;
+    fadeAlpha = isMobile ? 0.32 : 0.16;
+    glowMode = isMobile ? "source-over" : "lighter";
+    maxAlpha = isMobile ? 0.72 : 1;
+    dpr = Math.min(window.devicePixelRatio || 1, isMobile ? 1.25 : 2);
     canvas.width = Math.floor(width * dpr);
     canvas.height = Math.floor(height * dpr);
     canvas.style.width = `${width}px`;
@@ -248,6 +254,9 @@
 
     boom(x, y, kind === "chrys" || kind === "double" ? 1.25 : 1);
 
+    const sizeMul = isMobile ? 0.7 : 1;
+    const glitterChance = isMobile ? 0.85 : 0.45;
+
     for (let i = 0; i < count; i++) {
       const angle =
         kind === "ring"
@@ -255,12 +264,12 @@
           : rand(0, Math.PI * 2);
       const speed =
         kind === "ring"
-          ? rand(5.2, 6.4)
+          ? rand(4.2, 5.4)
           : kind === "willow"
-            ? rand(2.8, 7.2)
+            ? rand(2.2, 6.2)
             : kind === "spark"
-              ? rand(1.6, 4.2)
-              : rand(2.4, 9.2);
+              ? rand(1.4, 3.6)
+              : rand(2.0, 7.5);
 
       particles.push({
         x,
@@ -270,41 +279,40 @@
         life: 1,
         decay:
           kind === "willow"
-            ? rand(0.006, 0.012)
+            ? rand(0.008, 0.014)
             : kind === "spark"
-              ? rand(0.014, 0.024)
-              : rand(0.008, 0.016),
+              ? rand(0.016, 0.028)
+              : rand(isMobile ? 0.012 : 0.008, isMobile ? 0.022 : 0.016),
         gravity: kind === "willow" ? 0.042 : 0.026,
         friction: kind === "willow" ? 0.987 : 0.975,
-        size: kind === "spark" ? rand(1.6, 2.8) : rand(1.8, 3.6),
+        size: (kind === "spark" ? rand(1.2, 2.1) : rand(1.3, 2.6)) * sizeMul,
         color: pick(base),
-        glitter: Math.random() > 0.45,
-        willow: kind === "willow",
+        glitter: Math.random() > glitterChance,
+        willow: kind === "willow" && !isMobile,
       });
     }
 
-    // Bright core flash
-    for (let i = 0; i < 28; i++) {
+    const coreCount = isMobile ? 6 : 28;
+    for (let i = 0; i < coreCount; i++) {
       const a = rand(0, Math.PI * 2);
-      const s = rand(0.5, 3.2);
+      const s = rand(0.4, isMobile ? 1.8 : 3.2);
       particles.push({
         x,
         y,
         vx: Math.cos(a) * s,
         vy: Math.sin(a) * s,
-        life: 1,
-        decay: rand(0.03, 0.055),
+        life: isMobile ? 0.65 : 1,
+        decay: rand(0.04, 0.07),
         gravity: 0.01,
         friction: 0.96,
-        size: rand(2.5, 5.5),
-        color: "#fff8e8",
-        glitter: true,
+        size: rand(1.2, isMobile ? 2.2 : 5.5) * sizeMul,
+        color: isMobile ? pick(base) : "#fff8e8",
+        glitter: !isMobile,
         willow: false,
       });
     }
 
-    // Nested second bloom for denser sky
-    if (kind === "double" || Math.random() > 0.55) {
+    if (!isMobile && (kind === "double" || Math.random() > 0.55)) {
       const inner = pick(PALETTES);
       for (let i = 0; i < 70; i++) {
         const a = rand(0, Math.PI * 2);
@@ -392,14 +400,14 @@
     const dt = Math.min(32, ts - lastTs);
     lastTs = ts;
 
-    // Trail fade — slower so the sky stays glowing
+    // Trail fade — stronger on mobile to avoid white washout
     ctx.globalCompositeOperation = "source-over";
-    ctx.fillStyle = "rgba(5, 8, 20, 0.14)";
+    ctx.fillStyle = `rgba(5, 8, 20, ${fadeAlpha})`;
     ctx.fillRect(0, 0, width, height);
 
     drawStars(ts);
 
-    ctx.globalCompositeOperation = "lighter";
+    ctx.globalCompositeOperation = glowMode;
 
     // Rockets
     for (let i = rockets.length - 1; i >= 0; i--) {
@@ -453,9 +461,9 @@
       }
 
       if (r.vy >= -1.2 || r.y <= r.targetY) {
-        explode(r.x, r.y, r.palette, r.multi ? "double" : undefined);
-        // Occasional twin burst nearby
-        if (r.multi || Math.random() > 0.7) {
+        explode(r.x, r.y, r.palette, !isMobile && r.multi ? "double" : undefined);
+        // Twin burst — desktop only (too bright on phones)
+        if (!isMobile && (r.multi || Math.random() > 0.7)) {
           explode(
             r.x + rand(-50, 50),
             r.y + rand(-30, 30),
@@ -482,13 +490,13 @@
         continue;
       }
 
-      const alpha = Math.max(0, p.life);
+      const alpha = Math.max(0, p.life) * maxAlpha;
       ctx.beginPath();
       ctx.fillStyle = hexToRgba(p.color, alpha);
-      ctx.arc(p.x, p.y, p.size * (0.5 + 0.5 * alpha), 0, Math.PI * 2);
+      ctx.arc(p.x, p.y, p.size * (0.5 + 0.5 * Math.min(1, p.life)), 0, Math.PI * 2);
       ctx.fill();
 
-      if (p.glitter && Math.random() > 0.7) {
+      if (p.glitter && !isMobile && Math.random() > 0.7) {
         ctx.beginPath();
         ctx.fillStyle = `rgba(255, 255, 255, ${alpha * 0.85})`;
         ctx.arc(p.x, p.y, p.size * 0.35, 0, Math.PI * 2);
