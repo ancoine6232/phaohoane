@@ -52,11 +52,12 @@
     width = window.innerWidth;
     height = window.innerHeight;
     isMobile = width <= 640 || ("ontouchstart" in window && width <= 900);
-    particleScale = isMobile ? 0.42 : 1;
-    fadeAlpha = isMobile ? 0.32 : 0.16;
-    glowMode = isMobile ? "source-over" : "lighter";
-    maxAlpha = isMobile ? 0.72 : 1;
-    dpr = Math.min(window.devicePixelRatio || 1, isMobile ? 1.25 : 2);
+    // Keep mobile lush but capped so it won't wash out white
+    particleScale = isMobile ? 0.72 : 1;
+    fadeAlpha = isMobile ? 0.2 : 0.15;
+    glowMode = "lighter";
+    maxAlpha = isMobile ? 0.58 : 1;
+    dpr = Math.min(window.devicePixelRatio || 1, isMobile ? 1.75 : 2);
     canvas.width = Math.floor(width * dpr);
     canvas.height = Math.floor(height * dpr);
     canvas.style.width = `${width}px`;
@@ -314,8 +315,8 @@
 
     boom(x, y, kind === "chrys" || kind === "double" ? 1.3 : kind === "spark" ? 0.75 : 1, kind);
 
-    const sizeMul = isMobile ? 0.7 : 1;
-    const glitterChance = isMobile ? 0.85 : 0.45;
+    const sizeMul = isMobile ? 1.05 : 1;
+    const glitterChance = isMobile ? 0.7 : 0.45;
 
     for (let i = 0; i < count; i++) {
       const angle =
@@ -342,39 +343,40 @@
             ? rand(0.008, 0.014)
             : kind === "spark"
               ? rand(0.016, 0.028)
-              : rand(isMobile ? 0.012 : 0.008, isMobile ? 0.022 : 0.016),
+              : rand(isMobile ? 0.01 : 0.008, isMobile ? 0.018 : 0.016),
         gravity: kind === "willow" ? 0.042 : 0.026,
         friction: kind === "willow" ? 0.987 : 0.975,
-        size: (kind === "spark" ? rand(1.2, 2.1) : rand(1.3, 2.6)) * sizeMul,
+        size: (kind === "spark" ? rand(1.4, 2.4) : rand(1.6, 3.1)) * sizeMul,
         color: pick(base),
         glitter: Math.random() > glitterChance,
-        willow: kind === "willow" && !isMobile,
+        willow: kind === "willow",
       });
     }
 
-    const coreCount = isMobile ? 6 : 28;
+    const coreCount = isMobile ? 10 : 28;
     for (let i = 0; i < coreCount; i++) {
       const a = rand(0, Math.PI * 2);
-      const s = rand(0.4, isMobile ? 1.8 : 3.2);
+      const s = rand(0.4, isMobile ? 2.2 : 3.2);
       particles.push({
         x,
         y,
         vx: Math.cos(a) * s,
         vy: Math.sin(a) * s,
-        life: isMobile ? 0.65 : 1,
-        decay: rand(0.04, 0.07),
+        life: isMobile ? 0.8 : 1,
+        decay: rand(0.035, 0.06),
         gravity: 0.01,
         friction: 0.96,
-        size: rand(1.2, isMobile ? 2.2 : 5.5) * sizeMul,
+        size: rand(1.4, isMobile ? 2.8 : 5.5) * sizeMul,
         color: isMobile ? pick(base) : "#fff8e8",
-        glitter: !isMobile,
+        glitter: Math.random() > 0.5,
         willow: false,
       });
     }
 
-    if (!isMobile && (kind === "double" || Math.random() > 0.55)) {
+    if ((kind === "double" || Math.random() > (isMobile ? 0.72 : 0.55))) {
       const inner = pick(PALETTES);
-      for (let i = 0; i < 70; i++) {
+      const innerCount = isMobile ? 36 : 70;
+      for (let i = 0; i < innerCount; i++) {
         const a = rand(0, Math.PI * 2);
         const s = rand(1.2, 4.2);
         particles.push({
@@ -386,7 +388,7 @@
           decay: rand(0.012, 0.02),
           gravity: 0.03,
           friction: 0.97,
-          size: rand(1.4, 2.6),
+          size: rand(1.3, 2.4) * sizeMul,
           color: pick(inner),
           glitter: true,
           willow: false,
@@ -487,23 +489,37 @@
       r.vy += 0.035;
       r.life += dt;
       r.trail.push({ x: r.x, y: r.y, a: 1 });
-      if (r.trail.length > 12) r.trail.shift();
+      if (r.trail.length > (isMobile ? 18 : 14)) r.trail.shift();
+
+      // Smooth rising trail (line + dots) — avoids dotted look on phones
+      if (r.trail.length > 1) {
+        ctx.beginPath();
+        ctx.strokeStyle = "rgba(255, 220, 160, 0.45)";
+        ctx.lineWidth = isMobile ? 2 : 1.6;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.moveTo(r.trail[0].x, r.trail[0].y);
+        for (let t = 1; t < r.trail.length; t++) {
+          ctx.lineTo(r.trail[t].x, r.trail[t].y);
+        }
+        ctx.stroke();
+      }
 
       for (let t = 0; t < r.trail.length; t++) {
         const p = r.trail[t];
-        const alpha = (t / r.trail.length) * 0.55;
+        const alpha = (t / r.trail.length) * 0.7;
         ctx.beginPath();
         ctx.fillStyle = `rgba(255, 230, 180, ${alpha})`;
-        ctx.arc(p.x, p.y, 1.4, 0, Math.PI * 2);
+        ctx.arc(p.x, p.y, isMobile ? 1.8 : 1.4, 0, Math.PI * 2);
         ctx.fill();
       }
 
       ctx.beginPath();
       ctx.fillStyle = "#fff6d5";
-      ctx.arc(r.x, r.y, 2.2, 0, Math.PI * 2);
+      ctx.arc(r.x, r.y, isMobile ? 2.8 : 2.2, 0, Math.PI * 2);
       ctx.fill();
 
-      if (r.hueSpark && Math.random() > 0.6) {
+      if (r.hueSpark && Math.random() > 0.55) {
         particles.push({
           x: r.x,
           y: r.y,
@@ -513,7 +529,7 @@
           decay: 0.05,
           gravity: 0.02,
           friction: 0.96,
-          size: 1.2,
+          size: isMobile ? 1.6 : 1.2,
           color: pick(r.palette),
           glitter: false,
           willow: false,
@@ -521,9 +537,8 @@
       }
 
       if (r.vy >= -1.2 || r.y <= r.targetY) {
-        explode(r.x, r.y, r.palette, !isMobile && r.multi ? "double" : undefined);
-        // Twin burst — desktop only (too bright on phones)
-        if (!isMobile && (r.multi || Math.random() > 0.7)) {
+        explode(r.x, r.y, r.palette, r.multi ? "double" : undefined);
+        if (r.multi || Math.random() > (isMobile ? 0.82 : 0.7)) {
           explode(
             r.x + rand(-50, 50),
             r.y + rand(-30, 30),
@@ -550,20 +565,29 @@
         continue;
       }
 
-      const alpha = Math.max(0, p.life) * maxAlpha;
+      const life = Math.min(1, p.life);
+      const alpha = Math.max(0, life) * maxAlpha;
+      const radius = p.size * (0.55 + 0.55 * life);
+
+      // Soft halo so sparks look like light, not hard pixels
       ctx.beginPath();
-      ctx.fillStyle = hexToRgba(p.color, alpha);
-      ctx.arc(p.x, p.y, p.size * (0.5 + 0.5 * Math.min(1, p.life)), 0, Math.PI * 2);
+      ctx.fillStyle = hexToRgba(p.color, alpha * 0.28);
+      ctx.arc(p.x, p.y, radius * (isMobile ? 2.4 : 2.0), 0, Math.PI * 2);
       ctx.fill();
 
-      if (p.glitter && !isMobile && Math.random() > 0.7) {
+      ctx.beginPath();
+      ctx.fillStyle = hexToRgba(p.color, alpha);
+      ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+      ctx.fill();
+
+      if (p.glitter && Math.random() > (isMobile ? 0.82 : 0.7)) {
         ctx.beginPath();
-        ctx.fillStyle = `rgba(255, 255, 255, ${alpha * 0.85})`;
-        ctx.arc(p.x, p.y, p.size * 0.35, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(255, 250, 230, ${alpha * (isMobile ? 0.45 : 0.75)})`;
+        ctx.arc(p.x, p.y, radius * 0.35, 0, Math.PI * 2);
         ctx.fill();
       }
 
-      if (p.willow && p.life < 0.55 && Math.random() > 0.82 && particles.length < 4500) {
+      if (p.willow && p.life < 0.55 && Math.random() > 0.82 && particles.length < (isMobile ? 2800 : 4500)) {
         particles.push({
           x: p.x,
           y: p.y,
@@ -573,7 +597,7 @@
           decay: 0.03,
           gravity: 0.05,
           friction: 0.98,
-          size: 1,
+          size: isMobile ? 1.3 : 1,
           color: p.color,
           glitter: true,
           willow: false,
@@ -591,7 +615,7 @@
         finaleBurst();
         autoTimer = rand(isMobile ? 2200 : 1600, isMobile ? 3400 : 2600);
       } else if (wave > 0.35) {
-        const n = isMobile ? 2 + ((Math.random() * 3) | 0) : 4 + ((Math.random() * 5) | 0);
+        const n = isMobile ? 3 + ((Math.random() * 3) | 0) : 4 + ((Math.random() * 5) | 0);
         for (let i = 0; i < n; i++) {
           launch(
             rand(width * 0.06, width * 0.94),
@@ -601,9 +625,9 @@
             Math.random() > 0.5
           );
         }
-        autoTimer = rand(isMobile ? 500 : 280, isMobile ? 1000 : 650);
+        autoTimer = rand(isMobile ? 420 : 280, isMobile ? 850 : 650);
       } else {
-        const n = isMobile ? 1 + ((Math.random() * 2) | 0) : 2 + ((Math.random() * 2) | 0);
+        const n = isMobile ? 2 + ((Math.random() * 2) | 0) : 2 + ((Math.random() * 2) | 0);
         for (let i = 0; i < n; i++) {
           launch(
             rand(width * 0.1, width * 0.9),
