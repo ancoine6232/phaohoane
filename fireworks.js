@@ -85,89 +85,163 @@
     return audioCtx;
   }
 
+  function makeNoiseBuffer(ac, duration, decayPow = 2) {
+    const len = Math.floor(ac.sampleRate * duration);
+    const buf = ac.createBuffer(1, len, ac.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decayPow);
+    }
+    return buf;
+  }
+
+  function routeStereo(ac, source, pan) {
+    const gain = ac.createGain();
+    if (ac.createStereoPanner) {
+      const panner = ac.createStereoPanner();
+      panner.pan.value = pan;
+      source.connect(panner);
+      panner.connect(gain);
+    } else {
+      source.connect(gain);
+    }
+    gain.connect(ac.destination);
+    return gain;
+  }
+
+  function whoosh(x) {
+    if (!soundOn) return;
+    const ac = ensureAudio();
+    if (!ac) return;
+
+    const t = ac.currentTime;
+    const pan = ((x / width) * 2 - 1) * 0.65;
+    const src = ac.createBufferSource();
+    src.buffer = makeNoiseBuffer(ac, 0.55, 1.4);
+
+    const filter = ac.createBiquadFilter();
+    filter.type = "bandpass";
+    filter.Q.value = 4;
+    filter.frequency.setValueAtTime(400, t);
+    filter.frequency.exponentialRampToValueAtTime(1800, t + 0.35);
+    filter.frequency.exponentialRampToValueAtTime(900, t + 0.55);
+
+    src.connect(filter);
+    const gain = routeStereo(ac, filter, pan);
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(0.035, t + 0.08);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.55);
+    src.start(t);
+    src.stop(t + 0.55);
+  }
+
+  function cracklePop(ac, t, pan, power) {
+    const pops = 6 + ((Math.random() * 8 * power) | 0);
+    for (let i = 0; i < pops; i++) {
+      const when = t + 0.04 + i * rand(0.025, 0.07) + Math.random() * 0.08;
+      const src = ac.createBufferSource();
+      src.buffer = makeNoiseBuffer(ac, 0.06, 4);
+
+      const hp = ac.createBiquadFilter();
+      hp.type = "highpass";
+      hp.frequency.value = 1800 + Math.random() * 3500;
+
+      src.connect(hp);
+      const gain = routeStereo(ac, hp, pan + rand(-0.25, 0.25));
+      const vol = (0.025 + Math.random() * 0.04) * power;
+      gain.gain.setValueAtTime(0.0001, when);
+      gain.gain.exponentialRampToValueAtTime(vol, when + 0.004);
+      gain.gain.exponentialRampToValueAtTime(0.0001, when + 0.05);
+      src.start(when);
+      src.stop(when + 0.06);
+    }
+  }
+
   function boom(x, y, power = 1) {
     if (!soundOn) return;
     const ac = ensureAudio();
     if (!ac) return;
 
     const t = ac.currentTime;
-    const pan = ((x / width) * 2 - 1) * 0.7;
+    const pan = ((x / width) * 2 - 1) * 0.75;
+    const dist = 0.7 + (1 - y / height) * 0.45;
+    const p = power * dist;
 
-    const noiseBuf = ac.createBuffer(1, ac.sampleRate * 0.35, ac.sampleRate);
-    const data = noiseBuf.getChannelData(0);
-    for (let i = 0; i < data.length; i++) {
-      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / data.length, 2.2);
-    }
+    // 1) Deep thump — like the pressure hit of a firework
+    const thump = ac.createOscillator();
+    thump.type = "sine";
+    thump.frequency.setValueAtTime(95 + p * 30, t);
+    thump.frequency.exponentialRampToValueAtTime(28, t + 0.28);
+    const thumpGain = routeStereo(ac, thump, pan);
+    thumpGain.gain.setValueAtTime(0.0001, t);
+    thumpGain.gain.exponentialRampToValueAtTime(0.55 * p, t + 0.008);
+    thumpGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.32);
+    thump.start(t);
+    thump.stop(t + 0.35);
 
-    const src = ac.createBufferSource();
-    src.buffer = noiseBuf;
+    // 2) Mid body bang — snappy explosion noise
+    const bang = ac.createBufferSource();
+    bang.buffer = makeNoiseBuffer(ac, 0.45, 1.8);
+    const bangFilter = ac.createBiquadFilter();
+    bangFilter.type = "lowpass";
+    bangFilter.frequency.setValueAtTime(900 + p * 500, t);
+    bangFilter.frequency.exponentialRampToValueAtTime(180, t + 0.35);
+    bang.connect(bangFilter);
+    const bangGain = routeStereo(ac, bangFilter, pan);
+    bangGain.gain.setValueAtTime(0.0001, t);
+    bangGain.gain.exponentialRampToValueAtTime(0.38 * p, t + 0.006);
+    bangGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.4);
+    bang.start(t);
+    bang.stop(t + 0.45);
 
-    const filter = ac.createBiquadFilter();
-    filter.type = "bandpass";
-    filter.frequency.value = 180 + power * 420;
-    filter.Q.value = 0.7;
+    // 3) Sharp attack transient
+    const snap = ac.createBufferSource();
+    snap.buffer = makeNoiseBuffer(ac, 0.08, 6);
+    const snapHp = ac.createBiquadFilter();
+    snapHp.type = "highpass";
+    snapHp.frequency.value = 1200;
+    snap.connect(snapHp);
+    const snapGain = routeStereo(ac, snapHp, pan);
+    snapGain.gain.setValueAtTime(0.0001, t);
+    snapGain.gain.exponentialRampToValueAtTime(0.22 * p, t + 0.002);
+    snapGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.07);
+    snap.start(t);
+    snap.stop(t + 0.08);
 
-    const gain = ac.createGain();
-    gain.gain.setValueAtTime(0.0001, t);
-    gain.gain.exponentialRampToValueAtTime(0.12 * power, t + 0.01);
-    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.32);
-
-    if (ac.createStereoPanner) {
-      const panner = ac.createStereoPanner();
-      panner.pan.value = pan;
-      src.connect(filter);
-      filter.connect(panner);
-      panner.connect(gain);
-    } else {
-      src.connect(filter);
-      filter.connect(gain);
-    }
-    gain.connect(ac.destination);
-    src.start(t);
-    src.stop(t + 0.35);
-
-    // Soft crackle layer
-    const osc = ac.createOscillator();
-    const og = ac.createGain();
-    osc.type = "triangle";
-    osc.frequency.setValueAtTime(90 + power * 40, t);
-    osc.frequency.exponentialRampToValueAtTime(40, t + 0.18);
-    og.gain.setValueAtTime(0.0001, t);
-    og.gain.exponentialRampToValueAtTime(0.045 * power, t + 0.008);
-    og.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
-    osc.connect(og);
-    og.connect(ac.destination);
-    osc.start(t);
-    osc.stop(t + 0.22);
+    // 4) Spark crackles after the boom
+    cracklePop(ac, t, pan, p);
   }
 
-  function launch(x, targetY, palette, delay = 0) {
+  function launch(x, targetY, palette, delay = 0, multi = false) {
     rockets.push({
       x,
       y: height + 10,
-      vx: rand(-0.35, 0.35),
-      vy: -rand(9.5, 13.2),
-      targetY: targetY ?? rand(height * 0.18, height * 0.42),
+      vx: rand(-0.55, 0.55),
+      vy: -rand(10.5, 14.5),
+      targetY: targetY ?? rand(height * 0.12, height * 0.4),
       life: 0,
       delay,
       trail: [],
       palette: palette || pick(PALETTES),
-      hueSpark: Math.random() > 0.45,
+      hueSpark: Math.random() > 0.3,
+      multi,
+      whistled: false,
     });
   }
 
   function explode(x, y, palette, style) {
-    const kind = style || pick(["peony", "chrys", "ring", "willow", "spark"]);
+    const kind = style || pick(["peony", "chrys", "ring", "willow", "spark", "double"]);
     const base = palette || pick(PALETTES);
-    let count = 70;
+    let count = 140;
 
-    if (kind === "peony") count = 90 + ((Math.random() * 40) | 0);
-    if (kind === "chrys") count = 110 + ((Math.random() * 50) | 0);
-    if (kind === "ring") count = 64;
-    if (kind === "willow") count = 80;
-    if (kind === "spark") count = 48;
+    if (kind === "peony") count = 160 + ((Math.random() * 60) | 0);
+    if (kind === "chrys") count = 200 + ((Math.random() * 80) | 0);
+    if (kind === "ring") count = 110;
+    if (kind === "willow") count = 150;
+    if (kind === "spark") count = 90;
+    if (kind === "double") count = 130;
 
-    boom(x, y, kind === "chrys" ? 1.15 : 0.9);
+    boom(x, y, kind === "chrys" || kind === "double" ? 1.25 : 1);
 
     for (let i = 0; i < count; i++) {
       const angle =
@@ -176,12 +250,12 @@
           : rand(0, Math.PI * 2);
       const speed =
         kind === "ring"
-          ? rand(4.2, 5.1)
+          ? rand(5.2, 6.4)
           : kind === "willow"
-            ? rand(2.2, 5.8)
+            ? rand(2.8, 7.2)
             : kind === "spark"
-              ? rand(1.2, 3.4)
-              : rand(1.8, 7.4);
+              ? rand(1.6, 4.2)
+              : rand(2.4, 9.2);
 
       particles.push({
         x,
@@ -191,52 +265,85 @@
         life: 1,
         decay:
           kind === "willow"
-            ? rand(0.008, 0.014)
+            ? rand(0.006, 0.012)
             : kind === "spark"
-              ? rand(0.018, 0.03)
-              : rand(0.01, 0.02),
-        gravity: kind === "willow" ? 0.045 : 0.028,
-        friction: kind === "willow" ? 0.985 : 0.972,
-        size: kind === "spark" ? rand(1.2, 2.2) : rand(1.4, 2.8),
+              ? rand(0.014, 0.024)
+              : rand(0.008, 0.016),
+        gravity: kind === "willow" ? 0.042 : 0.026,
+        friction: kind === "willow" ? 0.987 : 0.975,
+        size: kind === "spark" ? rand(1.6, 2.8) : rand(1.8, 3.6),
         color: pick(base),
-        glitter: Math.random() > 0.65,
+        glitter: Math.random() > 0.45,
         willow: kind === "willow",
       });
     }
 
-    // Bright core flash particles
-    for (let i = 0; i < 12; i++) {
+    // Bright core flash
+    for (let i = 0; i < 28; i++) {
       const a = rand(0, Math.PI * 2);
-      const s = rand(0.4, 2.2);
+      const s = rand(0.5, 3.2);
       particles.push({
         x,
         y,
         vx: Math.cos(a) * s,
         vy: Math.sin(a) * s,
         life: 1,
-        decay: rand(0.04, 0.07),
+        decay: rand(0.03, 0.055),
         gravity: 0.01,
         friction: 0.96,
-        size: rand(2, 4),
+        size: rand(2.5, 5.5),
         color: "#fff8e8",
         glitter: true,
         willow: false,
       });
     }
+
+    // Nested second bloom for denser sky
+    if (kind === "double" || Math.random() > 0.55) {
+      const inner = pick(PALETTES);
+      for (let i = 0; i < 70; i++) {
+        const a = rand(0, Math.PI * 2);
+        const s = rand(1.2, 4.2);
+        particles.push({
+          x,
+          y,
+          vx: Math.cos(a) * s,
+          vy: Math.sin(a) * s,
+          life: 1,
+          decay: rand(0.012, 0.02),
+          gravity: 0.03,
+          friction: 0.97,
+          size: rand(1.4, 2.6),
+          color: pick(inner),
+          glitter: true,
+          willow: false,
+        });
+      }
+    }
   }
 
   function finaleBurst() {
     const cx = width * 0.5;
-    const cy = height * 0.32;
-    for (let i = 0; i < 7; i++) {
+    const cy = height * 0.3;
+    for (let i = 0; i < 16; i++) {
       setTimeout(() => {
         explode(
-          cx + rand(-width * 0.28, width * 0.28),
-          cy + rand(-height * 0.08, height * 0.12),
+          cx + rand(-width * 0.38, width * 0.38),
+          cy + rand(-height * 0.12, height * 0.16),
           pick(PALETTES),
-          pick(["peony", "chrys", "ring", "willow"])
+          pick(["peony", "chrys", "ring", "willow", "double"])
         );
-      }, i * 180);
+      }, i * 90);
+    }
+    // Extra rising rockets during finale
+    for (let i = 0; i < 10; i++) {
+      launch(
+        rand(width * 0.08, width * 0.92),
+        rand(height * 0.12, height * 0.36),
+        pick(PALETTES),
+        80 + i * 110,
+        true
+      );
     }
   }
 
@@ -279,9 +386,9 @@
     const dt = Math.min(32, ts - lastTs);
     lastTs = ts;
 
-    // Trail fade
+    // Trail fade — slower so the sky stays glowing
     ctx.globalCompositeOperation = "source-over";
-    ctx.fillStyle = "rgba(5, 8, 20, 0.22)";
+    ctx.fillStyle = "rgba(5, 8, 20, 0.14)";
     ctx.fillRect(0, 0, width, height);
 
     drawStars(ts);
@@ -294,6 +401,11 @@
       if (r.delay > 0) {
         r.delay -= dt;
         continue;
+      }
+
+      if (!r.whistled) {
+        r.whistled = true;
+        if (Math.random() > 0.45) whoosh(r.x);
       }
 
       r.x += r.vx;
@@ -335,7 +447,16 @@
       }
 
       if (r.vy >= -1.2 || r.y <= r.targetY) {
-        explode(r.x, r.y, r.palette);
+        explode(r.x, r.y, r.palette, r.multi ? "double" : undefined);
+        // Occasional twin burst nearby
+        if (r.multi || Math.random() > 0.7) {
+          explode(
+            r.x + rand(-50, 50),
+            r.y + rand(-30, 30),
+            pick(PALETTES),
+            pick(["peony", "spark", "ring"])
+          );
+        }
         rockets.splice(i, 1);
       }
     }
@@ -368,7 +489,7 @@
         ctx.fill();
       }
 
-      if (p.willow && p.life < 0.55 && Math.random() > 0.82) {
+      if (p.willow && p.life < 0.55 && Math.random() > 0.82 && particles.length < 4500) {
         particles.push({
           x: p.x,
           y: p.y,
@@ -388,27 +509,37 @@
 
     ctx.globalCompositeOperation = "source-over";
 
-    // Auto show
+    // Auto show — dense continuous barrage
     autoTimer -= dt;
     if (autoTimer <= 0) {
       const wave = Math.random();
-      if (wave > 0.92) {
+      if (wave > 0.82) {
         finaleBurst();
-        autoTimer = rand(2800, 4200);
-      } else if (wave > 0.55) {
-        const n = 2 + ((Math.random() * 3) | 0);
+        autoTimer = rand(1600, 2600);
+      } else if (wave > 0.35) {
+        const n = 4 + ((Math.random() * 5) | 0);
         for (let i = 0; i < n; i++) {
           launch(
-            rand(width * 0.12, width * 0.88),
-            rand(height * 0.16, height * 0.4),
+            rand(width * 0.06, width * 0.94),
+            rand(height * 0.1, height * 0.42),
             pick(PALETTES),
-            i * rand(120, 280)
+            i * rand(40, 140),
+            Math.random() > 0.5
           );
         }
-        autoTimer = rand(900, 1800);
+        autoTimer = rand(280, 650);
       } else {
-        launch(rand(width * 0.15, width * 0.85));
-        autoTimer = rand(450, 1100);
+        const n = 2 + ((Math.random() * 2) | 0);
+        for (let i = 0; i < n; i++) {
+          launch(
+            rand(width * 0.1, width * 0.9),
+            undefined,
+            pick(PALETTES),
+            i * 60,
+            true
+          );
+        }
+        autoTimer = rand(180, 420);
       }
     }
 
@@ -434,7 +565,17 @@
   function pointerLaunch(clientX, clientY) {
     const x = clientX;
     const y = Math.min(clientY, height * 0.55);
-    launch(x, Math.max(height * 0.12, y));
+    const target = Math.max(height * 0.1, y);
+    // Fan of rockets on click
+    for (let i = 0; i < 5; i++) {
+      launch(
+        x + rand(-70, 70),
+        target + rand(-40, 40),
+        pick(PALETTES),
+        i * 70,
+        true
+      );
+    }
   }
 
   canvas.addEventListener("pointerdown", (e) => {
@@ -455,15 +596,16 @@
   updateCountdown();
   setInterval(updateCountdown, 1000);
 
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 14; i++) {
     launch(
-      rand(width * 0.2, width * 0.8),
-      rand(height * 0.2, height * 0.38),
+      rand(width * 0.08, width * 0.92),
+      rand(height * 0.12, height * 0.4),
       pick(PALETTES),
-      400 + i * 350
+      120 + i * 110,
+      true
     );
   }
-  autoTimer = 2200;
+  autoTimer = 900;
 
   // First paint
   ctx.fillStyle = "#050814";
